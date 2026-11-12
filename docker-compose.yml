@@ -3,27 +3,50 @@ services:
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: aurelia
-      POSTGRES_PASSWORD: aurelia_dev
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-aurelia_dev}
       POSTGRES_DB: aurelia
-    ports: ["5432:5432"]
-    volumes: ["pgdata:/var/lib/postgresql/data"]
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./infra/db/init.sql:/docker-entrypoint-initdb.d/001-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aurelia -d aurelia"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
   api:
     build: ./services/api
     environment:
-      DATABASE_URL: postgres://aurelia:aurelia_dev@db:5432/aurelia
-    ports: ["8080:8080"]
-    depends_on: [db]
+      DATABASE_URL: postgres://aurelia:${POSTGRES_PASSWORD:-aurelia_dev}@db:5432/aurelia
+      RUST_LOG: info,tower_http=info
+    ports:
+      - "8080:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+
   gateway:
     image: openresty/openresty:1.27.1.2-alpine
-    volumes: ["./services/gateway/nginx.conf:/usr/local/openresty/nginx/conf/nginx.conf:ro","./services/gateway/lua:/etc/nginx/lua:ro"]
-    ports: ["8088:8088"]
-    depends_on: [api]
+    volumes:
+      - ./services/gateway/nginx.conf:/usr/local/openresty/nginx/conf/nginx.conf:ro
+      - ./services/gateway/lua:/etc/nginx/lua:ro
+    ports:
+      - "8088:8088"
+    depends_on:
+      - api
+
   web:
     image: node:22-alpine
     working_dir: /app
-    volumes: ["./apps/web:/app"]
+    volumes:
+      - ./apps/web:/app
     command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
-    ports: ["5173:5173"]
-    depends_on: [gateway]
+    ports:
+      - "5173:5173"
+    depends_on:
+      - gateway
+
 volumes:
   pgdata:
