@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build"
+    "build": "tsc --noEmit && vite build"
   },
   "dependencies": {
     "vite": "latest",
@@ -15,5 +15,10 @@
     "three": "latest",
     "lucide-react": "latest",
     "@vitejs/plugin-react": "latest"
+  },
+  "devDependencies": {
+    "@types/react": "latest",
+    "@types/react-dom": "latest",
+    "@types/three": "latest"
   }
 }
