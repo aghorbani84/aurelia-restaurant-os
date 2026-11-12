@@ -1,0 +1,19 @@
+{
+  "name": "aurelia-web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build"
+  },
+  "dependencies": {
+    "vite": "latest",
+    "typescript": "latest",
+    "react": "latest",
+    "react-dom": "latest",
+    "three": "latest",
+    "lucide-react": "latest",
+    "@vitejs/plugin-react": "latest"
+  }
+}
