@@ -79,3 +79,24 @@ Database bootstrap schema: `infra/db/init.sql`
 Gateway configuration: `services/gateway/nginx.conf`
 
 Web app: `apps/web`
+
+
+## API integration tests
+
+The order API integration test connects to a **dedicated disposable PostgreSQL database** and clears its AURELIA tables before running. Never point `TEST_DATABASE_URL` at a development or production database.
+
+Example using a temporary PostgreSQL container:
+
+```bash
+docker run --rm --name aurelia-test-db \
+  -e POSTGRES_USER=aurelia \
+  -e POSTGRES_PASSWORD=aurelia_test \
+  -e POSTGRES_DB=aurelia_test \
+  -p 5433:5432 postgres:16-alpine
+
+# In another terminal:
+TEST_DATABASE_URL='postgres://aurelia:aurelia_test@localhost:5433/aurelia_test' \
+  cargo test --manifest-path services/api/Cargo.toml
+```
+
+GitHub Actions provisions an isolated PostgreSQL 16 service and runs `cargo fmt --check`, `cargo check`, and `cargo test`.
