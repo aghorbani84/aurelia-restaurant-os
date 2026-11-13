@@ -113,9 +113,7 @@ async fn list_categories(
     ))
 }
 
-async fn list_menu_items(
-    State(state): State<AppState>,
-) -> Result<Json<Vec<MenuItem>>, ApiError> {
+async fn list_menu_items(State(state): State<AppState>) -> Result<Json<Vec<MenuItem>>, ApiError> {
     let rows = sqlx::query_as::<_, (i64, Option<i64>, Option<String>, String, String, i64, bool)>(
         "SELECT mi.id, mi.category_id, mc.name, mi.name, mi.description, mi.price_minor, mi.available
          FROM menu_items mi
@@ -265,9 +263,7 @@ async fn main() {
     let listener = tokio::net::TcpListener::bind(address)
         .await
         .expect("failed to bind API listener");
-    axum::serve(listener, app)
-        .await
-        .expect("API server failed");
+    axum::serve(listener, app).await.expect("API server failed");
 }
 
 #[cfg(test)]
