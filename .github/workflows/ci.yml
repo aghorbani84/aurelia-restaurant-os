@@ -1,16 +1,42 @@
 name: CI
-on: [push, pull_request]
+
+on:
+  push:
+  pull_request:
+
 jobs:
   web:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with: {node-version: 22}
+        with:
+          node-version: 22
       - run: cd apps/web && npm install && npm run build
+
   rust:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: aurelia
+          POSTGRES_PASSWORD: aurelia_test
+          POSTGRES_DB: aurelia_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U aurelia -d aurelia_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgres://aurelia:aurelia_test@localhost:5432/aurelia_test
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cd services/api && cargo fmt --check
       - run: cd services/api && cargo check
+      - run: cd services/api && cargo test
