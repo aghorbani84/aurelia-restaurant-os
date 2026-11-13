@@ -26,6 +26,7 @@ struct ErrorResponse {
     error: &'static str,
 }
 
+#[derive(Debug)]
 enum ApiError {
     BadRequest(&'static str),
     NotFound(&'static str),
@@ -267,4 +268,168 @@ async fn main() {
     axum::serve(listener, app)
         .await
         .expect("API server failed");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn test_database() -> PgPool {
+        let database_url = env::var("TEST_DATABASE_URL")
+            .expect("TEST_DATABASE_URL must point to a dedicated disposable test database");
+        let db = PgPoolOptions::new()
+            .max_connections(2)
+            .connect(&database_url)
+            .await
+            .expect("connect to test PostgreSQL database");
+
+        for statement in include_str!("../../../infra/db/init.sql").split(';') {
+            let statement = statement.trim();
+            if !statement.is_empty() {
+                sqlx::query(statement)
+                    .execute(&db)
+                    .await
+                    .expect("initialize test database schema");
+            }
+        }
+
+        sqlx::query(
+            "TRUNCATE TABLE order_lines, orders, menu_items, menu_categories RESTART IDENTITY CASCADE",
+        )
+        .execute(&db)
+        .await
+        .expect("reset dedicated test database");
+
+        db
+    }
+
+    async fn submit(
+        db: &PgPool,
+        customer_name: &str,
+        items: Vec<OrderItemInput>,
+    ) -> Result<(StatusCode, Json<CreatedOrder>), ApiError> {
+        create_order(
+            State(AppState { db: db.clone() }),
+            Json(CreateOrderRequest {
+                customer_name: customer_name.to_owned(),
+                items,
+            }),
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn order_creation_uses_database_prices_and_rejects_invalid_orders() {
+        let db = test_database().await;
+
+        let available_item_id: i64 = sqlx::query_scalar(
+            "INSERT INTO menu_items (name, price_minor, available)
+             VALUES ('Integration test meal', 12500, TRUE)
+             RETURNING id",
+        )
+        .fetch_one(&db)
+        .await
+        .expect("insert available test menu item");
+
+        let (status, Json(created)) = submit(
+            &db,
+            "Integration Test",
+            vec![OrderItemInput {
+                menu_item_id: available_item_id,
+                quantity: 2,
+            }],
+        )
+        .await
+        .expect("valid order should be created");
+
+        assert_eq!(status, StatusCode::CREATED);
+        assert_eq!(created.total_minor, 25_000);
+        assert_eq!(created.status, "pending");
+
+        let saved_line: (i32, i64) = sqlx::query_as(
+            "SELECT quantity, unit_price_minor FROM order_lines WHERE order_id = $1",
+        )
+        .bind(created.id)
+        .fetch_one(&db)
+        .await
+        .expect("persisted order line should exist");
+        assert_eq!(saved_line, (2, 12_500));
+
+        let unavailable_item_id: i64 = sqlx::query_scalar(
+            "INSERT INTO menu_items (name, price_minor, available)
+             VALUES ('Unavailable test meal', 9000, FALSE)
+             RETURNING id",
+        )
+        .fetch_one(&db)
+        .await
+        .expect("insert unavailable test menu item");
+
+        assert!(matches!(
+            submit(
+                &db,
+                "Integration Test",
+                vec![OrderItemInput {
+                    menu_item_id: unavailable_item_id,
+                    quantity: 1,
+                }],
+            )
+            .await,
+            Err(ApiError::Conflict(_))
+        ));
+
+        assert!(matches!(
+            submit(
+                &db,
+                "Integration Test",
+                vec![OrderItemInput {
+                    menu_item_id: available_item_id,
+                    quantity: 0,
+                }],
+            )
+            .await,
+            Err(ApiError::BadRequest(_))
+        ));
+
+        assert!(matches!(
+            submit(
+                &db,
+                "Integration Test",
+                vec![OrderItemInput {
+                    menu_item_id: i64::MAX,
+                    quantity: 1,
+                }],
+            )
+            .await,
+            Err(ApiError::NotFound(_))
+        ));
+
+        let overflow_item_id: i64 = sqlx::query_scalar(
+            "INSERT INTO menu_items (name, price_minor, available)
+             VALUES ('Overflow test meal', $1, TRUE)
+             RETURNING id",
+        )
+        .bind(i64::MAX)
+        .fetch_one(&db)
+        .await
+        .expect("insert overflow test menu item");
+
+        assert!(matches!(
+            submit(
+                &db,
+                "Integration Test",
+                vec![OrderItemInput {
+                    menu_item_id: overflow_item_id,
+                    quantity: 2,
+                }],
+            )
+            .await,
+            Err(ApiError::BadRequest(_))
+        ));
+
+        let order_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM orders")
+            .fetch_one(&db)
+            .await
+            .expect("count persisted orders");
+        assert_eq!(order_count, 1, "rejected orders must not be persisted");
+    }
 }
