@@ -16,6 +16,8 @@ Requirements: Docker Engine and Docker Compose plugin.
 ```bash
 # Optional: set a local development password before starting
 export POSTGRES_PASSWORD='change-this-local-dev-password'
+# Optional: only needed when browsers access the API from a different origin
+export CORS_ALLOWED_ORIGINS='https://app.example.com,https://admin.example.com'
 docker compose up --build
 ```
 
@@ -63,7 +65,7 @@ Order creation validates customer name and line quantities, checks menu item ava
 
 ## Current limitations
 
-- CORS is permissive for local development; production origins and security headers must be configured explicitly.
+- Cross-origin API access is disabled by default. Set `CORS_ALLOWED_ORIGINS` to a comma-separated list of exact origins when a separate browser origin is required; wildcard (`*`) and `null` origins are rejected. The local Vite proxy uses same-origin requests and does not need CORS.
 - There is no customer/admin authentication or role-based authorization yet.
 - No payment integration is present.
 - The web UI is still a starter and is not yet connected to all API workflows.
