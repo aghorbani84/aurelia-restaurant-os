@@ -1,6 +1,6 @@
 use axum::{
     extract::State,
-    http::StatusCode,
+    http::{header, HeaderValue, Method, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
@@ -8,7 +8,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use sqlx::{postgres::PgPoolOptions, PgPool};
 use std::{env, net::SocketAddr};
-use tower_http::{cors::CorsLayer, trace::TraceLayer};
+use tower_http::{cors::{AllowOrigin, CorsLayer}, trace::TraceLayer};
 use uuid::Uuid;
 
 #[derive(Clone)]
@@ -237,6 +237,41 @@ async fn create_order(
     ))
 }
 
+fn parse_allowed_origins(raw: &str) -> Result<Vec<HeaderValue>, String> {
+    raw.split(',')
+        .map(str::trim)
+        .filter(|origin| !origin.is_empty())
+        .map(|origin| {
+            if origin == "*" || origin == "null" {
+                return Err(
+                    "CORS_ALLOWED_ORIGINS must contain exact origins; '*' and 'null' are not allowed"
+                        .to_owned(),
+                );
+            }
+
+            origin.parse::<HeaderValue>().map_err(|_| {
+                format!("CORS_ALLOWED_ORIGINS contains an invalid origin: {origin}")
+            })
+        })
+        .collect()
+}
+
+fn cors_layer() -> CorsLayer {
+    let configured_origins = env::var("CORS_ALLOWED_ORIGINS").unwrap_or_default();
+    let origins = parse_allowed_origins(&configured_origins)
+        .unwrap_or_else(|error| panic!("{error}"));
+
+    let cors = CorsLayer::new()
+        .allow_methods([Method::GET, Method::POST])
+        .allow_headers([header::CONTENT_TYPE]);
+
+    if origins.is_empty() {
+        cors
+    } else {
+        cors.allow_origin(AllowOrigin::list(origins))
+    }
+}
+
 #[tokio::main]
 async fn main() {
     let database_url =
@@ -256,7 +291,7 @@ async fn main() {
         .route("/api/menu/items", get(list_menu_items))
         .route("/api/orders", post(create_order))
         .with_state(state)
-        .layer(CorsLayer::permissive())
+        .layer(cors_layer())
         .layer(TraceLayer::new_for_http());
 
     let address: SocketAddr = "0.0.0.0:8080".parse().expect("valid bind address");
@@ -269,6 +304,29 @@ async fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cors_allowlist_trims_entries_and_ignores_blanks() {
+        let origins = parse_allowed_origins(
+            " https://shop.example , ,http://localhost:5173 ",
+        )
+        .expect("valid exact origins");
+
+        assert_eq!(
+            origins,
+            vec![
+                HeaderValue::from_static("https://shop.example"),
+                HeaderValue::from_static("http://localhost:5173"),
+            ],
+        );
+    }
+
+    #[test]
+    fn cors_allowlist_rejects_wildcard_null_and_invalid_header_values() {
+        assert!(parse_allowed_origins("*").is_err());
+        assert!(parse_allowed_origins("null").is_err());
+        assert!(parse_allowed_origins("https://shop.example\\nInjected: true").is_err());
+    }
 
     async fn test_database() -> PgPool {
         let database_url = env::var("TEST_DATABASE_URL")
