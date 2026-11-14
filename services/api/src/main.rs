@@ -325,7 +325,7 @@ mod tests {
     fn cors_allowlist_rejects_wildcard_null_and_invalid_header_values() {
         assert!(parse_allowed_origins("*").is_err());
         assert!(parse_allowed_origins("null").is_err());
-        assert!(parse_allowed_origins("https://shop.example\\nInjected: true").is_err());
+        assert!(parse_allowed_origins("https://shop.example\nInjected: true").is_err());
     }
 
     async fn test_database() -> PgPool {
