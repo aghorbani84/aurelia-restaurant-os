@@ -8,7 +8,10 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use sqlx::{postgres::PgPoolOptions, PgPool};
 use std::{env, net::SocketAddr};
-use tower_http::{cors::{AllowOrigin, CorsLayer}, trace::TraceLayer};
+use tower_http::{
+    cors::{AllowOrigin, CorsLayer},
+    trace::TraceLayer,
+};
 use uuid::Uuid;
 
 #[derive(Clone)]
@@ -258,8 +261,8 @@ fn parse_allowed_origins(raw: &str) -> Result<Vec<HeaderValue>, String> {
 
 fn cors_layer() -> CorsLayer {
     let configured_origins = env::var("CORS_ALLOWED_ORIGINS").unwrap_or_default();
-    let origins = parse_allowed_origins(&configured_origins)
-        .unwrap_or_else(|error| panic!("{error}"));
+    let origins =
+        parse_allowed_origins(&configured_origins).unwrap_or_else(|error| panic!("{error}"));
 
     let cors = CorsLayer::new()
         .allow_methods([Method::GET, Method::POST])
@@ -307,10 +310,8 @@ mod tests {
 
     #[test]
     fn cors_allowlist_trims_entries_and_ignores_blanks() {
-        let origins = parse_allowed_origins(
-            " https://shop.example , ,http://localhost:5173 ",
-        )
-        .expect("valid exact origins");
+        let origins = parse_allowed_origins(" https://shop.example , ,http://localhost:5173 ")
+            .expect("valid exact origins");
 
         assert_eq!(
             origins,
