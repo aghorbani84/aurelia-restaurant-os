@@ -21,6 +21,7 @@ services:
     environment:
       DATABASE_URL: postgres://aurelia:${POSTGRES_PASSWORD:-aurelia_dev}@db:5432/aurelia
       RUST_LOG: info,tower_http=info
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
     ports:
       - "8080:8080"
     depends_on:
