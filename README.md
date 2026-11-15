@@ -32,7 +32,7 @@ Services:
 
 The Compose default database password is for local development only. Set `POSTGRES_PASSWORD` before using the stack beyond a local machine. Do not commit real credentials.
 
-The schema in `infra/db/init.sql` is mounted into PostgreSQL's initialization directory. PostgreSQL executes it only when the data directory is first initialized. If you change the schema and need a clean local database, you can run `docker compose down -v` and then start the stack again. **This deletes the local PostgreSQL volume and all data in it.**
+The API applies versioned SQLx migrations at startup and records applied versions in PostgreSQL. The initial migration uses idempotent table creation so an existing local volume initialized by the previous bootstrap SQL keeps its current tables and data. Future schema changes must be added as new migration files; do not edit an already-applied migration.
 
 ## API
 
@@ -69,14 +69,14 @@ Order creation validates customer name and line quantities, checks menu item ava
 - There is no customer/admin authentication or role-based authorization yet.
 - No payment integration is present.
 - The web UI is still a starter and is not yet connected to all API workflows.
-- The initial SQL script is for a fresh local database; a versioned migration workflow is still needed.
+- Schema changes are managed through versioned SQLx migrations in `services/api/migrations`.
 - CI results must be checked on the relevant GitHub Actions run; a pushed commit alone is not evidence of a successful build.
 
 ## Development
 
 Rust API source: `services/api`
 
-Database bootstrap schema: `infra/db/init.sql`
+Database migrations: `services/api/migrations`
 
 Gateway configuration: `services/gateway/nginx.conf`
 
