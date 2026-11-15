@@ -1,6 +1,7 @@
 FROM rust:1.86-slim AS build
 WORKDIR /app
-COPY Cargo.toml ./
+COPY Cargo.toml build.rs ./
+COPY migrations ./migrations
 COPY src ./src
 RUN cargo build --release
 
