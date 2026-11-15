@@ -14,6 +14,8 @@ use tower_http::{
 };
 use uuid::Uuid;
 
+static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
+
 #[derive(Clone)]
 struct AppState {
     db: PgPool,
@@ -286,6 +288,11 @@ async fn main() {
         .await
         .expect("failed to connect to PostgreSQL");
 
+    MIGRATOR
+        .run(&db)
+        .await
+        .expect("failed to apply database migrations");
+
     let state = AppState { db };
     let app = Router::new()
         .route("/health", get(health))
@@ -338,15 +345,10 @@ mod tests {
             .await
             .expect("connect to test PostgreSQL database");
 
-        for statement in include_str!("../../../infra/db/init.sql").split(';') {
-            let statement = statement.trim();
-            if !statement.is_empty() {
-                sqlx::query(statement)
-                    .execute(&db)
-                    .await
-                    .expect("initialize test database schema");
-            }
-        }
+        MIGRATOR
+            .run(&db)
+            .await
+            .expect("apply SQLx migrations to test database");
 
         sqlx::query(
             "TRUNCATE TABLE order_lines, orders, menu_items, menu_categories RESTART IDENTITY CASCADE",
