@@ -40,3 +40,16 @@ jobs:
       - run: cd services/api && cargo fmt --check
       - run: cd services/api && cargo check
       - run: cd services/api && cargo test
+
+  gateway:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Compose configuration
+        run: docker compose config --quiet
+      - name: Validate OpenResty configuration
+        run: |
+          docker run --rm \
+            -v "$PWD/services/gateway/nginx.conf:/usr/local/openresty/nginx/conf/nginx.conf:ro" \
+            -v "$PWD/services/gateway/lua:/etc/nginx/lua:ro" \
+            openresty/openresty:1.27.1.2-alpine openresty -t
