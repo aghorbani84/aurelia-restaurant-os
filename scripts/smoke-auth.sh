@@ -6,7 +6,7 @@ export COOKIE_SECURE=false
 
 tmp_dir="$(mktemp -d)"
 cleanup() {
-  docker compose down -v --remove-orphans
+  docker compose down -v --remove-orphans || true
   rm -rf "$tmp_dir"
 }
 trap cleanup EXIT
