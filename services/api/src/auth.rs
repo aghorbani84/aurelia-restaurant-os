@@ -307,11 +307,10 @@ pub(crate) async fn login(
 
     sqlx::query(
         "INSERT INTO staff_sessions (token_hash, staff_user_id, expires_at)
-         VALUES ($1, $2, now() + ($3 * interval '1 second'))",
+         VALUES ($1, $2, now() + interval '12 hours')",
     )
     .bind(token_hash)
     .bind(user_id)
-    .bind(SESSION_TTL_SECONDS)
     .execute(&state.db)
     .await
     .map_err(|_| ApiError::Internal)?;
