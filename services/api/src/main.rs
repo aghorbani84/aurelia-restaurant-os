@@ -261,7 +261,7 @@ async fn create_order(
 async fn fetch_orders(
     db: &PgPool,
     active_only: bool,
-) -> Result<Json<Vec<OrderSummary>>, ApiError> {
+) -> Result<Response, ApiError> {
     let rows = if active_only {
         sqlx::query_as::<_, (i64, String, String, String, i64)>(
             "SELECT id, order_number, customer_name, status, total_minor
@@ -285,7 +285,7 @@ async fn fetch_orders(
         .map_err(|_| ApiError::Internal)?
     };
 
-    Ok(Json(
+    let mut response = Json(
         rows.into_iter()
             .map(
                 |(id, order_number, customer_name, status, total_minor)| OrderSummary {
@@ -296,14 +296,20 @@ async fn fetch_orders(
                     total_minor,
                 },
             )
-            .collect(),
-    ))
+            .collect::<Vec<_>>(),
+    )
+    .into_response();
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("no-store"),
+    );
+    Ok(response)
 }
 
 async fn list_admin_orders(
     State(state): State<AppState>,
     headers: HeaderMap,
-) -> Result<Json<Vec<OrderSummary>>, ApiError> {
+) -> Result<Response, ApiError> {
     let staff = auth::current_staff(&state, &headers).await?;
     if !auth::can_view_admin_orders(&staff.role) {
         return Err(ApiError::Forbidden);
@@ -575,7 +581,7 @@ mod tests {
                 .await
                 .expect("session token hash should be stored");
         assert_eq!(stored_hash.len(), 32);
-        assert_ne!(stored_hash, raw_token.as_bytes());
+        assert_ne!(stored_hash.as_slice(), raw_token.as_bytes());
 
         let mut headers = HeaderMap::new();
         headers.insert(
