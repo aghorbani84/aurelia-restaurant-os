@@ -49,7 +49,7 @@ jobs:
         run: docker compose config --quiet
       - name: Validate OpenResty configuration
         run: |
-          docker run --rm \
+          docker run --rm --add-host api:127.0.0.1 \
             -v "$PWD/services/gateway/nginx.conf:/usr/local/openresty/nginx/conf/nginx.conf:ro" \
             -v "$PWD/services/gateway/lua:/etc/nginx/lua:ro" \
             openresty/openresty:1.27.1.2-alpine openresty -t
