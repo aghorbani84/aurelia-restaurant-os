@@ -53,3 +53,11 @@ jobs:
             -v "$PWD/services/gateway/nginx.conf:/usr/local/openresty/nginx/conf/nginx.conf:ro" \
             -v "$PWD/services/gateway/lua:/etc/nginx/lua:ro" \
             openresty/openresty:1.27.1.2-alpine openresty -t
+
+
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Exercise the Docker API and staff authorization flow
+        run: bash scripts/smoke-auth.sh
