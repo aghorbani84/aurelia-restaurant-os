@@ -45,9 +45,9 @@ export AURELIA_ADMIN_USERNAME=owner
 read -rsp 'Initial owner password (12-128 bytes): ' AURELIA_ADMIN_PASSWORD
 printf '\n'
 export AURELIA_ADMIN_PASSWORD
-docker compose exec \\
-  -e AURELIA_ADMIN_USERNAME \\
-  -e AURELIA_ADMIN_PASSWORD \\
+docker compose exec \
+  -e AURELIA_ADMIN_USERNAME \
+  -e AURELIA_ADMIN_PASSWORD \
   api aurelia-api bootstrap-owner
 unset AURELIA_ADMIN_PASSWORD AURELIA_ADMIN_USERNAME
 ```
@@ -60,12 +60,12 @@ Additional staff accounts can be provisioned by an operator with Docker access. 
 export AURELIA_STAFF_USERNAME=chef_01
 export AURELIA_STAFF_ROLE=chef
 read -rsp 'Staff password (12-128 bytes): ' AURELIA_STAFF_PASSWORD
-printf '\\n'
+printf '\n'
 export AURELIA_STAFF_PASSWORD
-docker compose exec \\
-  -e AURELIA_STAFF_USERNAME \\
-  -e AURELIA_STAFF_PASSWORD \\
-  -e AURELIA_STAFF_ROLE \\
+docker compose exec \
+  -e AURELIA_STAFF_USERNAME \
+  -e AURELIA_STAFF_PASSWORD \
+  -e AURELIA_STAFF_ROLE \
   api aurelia-api create-staff
 unset AURELIA_STAFF_PASSWORD AURELIA_STAFF_USERNAME AURELIA_STAFF_ROLE
 ```
@@ -102,7 +102,7 @@ The login endpoint is limited to 10 requests per minute per client IP at the Ope
 - `chef`: kitchen order view.
 - `waiter`: service order view.
 
-These are currently read-only order-summary endpoints. They are not a complete KDS or staff-management system. No staff-creation or role-change API is exposed yet. The initial owner is created through the CLI; additional staff provisioning is a future protected workflow.
+These are currently read-only order-summary endpoints. They are not a complete KDS or staff-management system. No staff-creation or role-change API is exposed yet. The initial owner and additional staff accounts are provisioned through the local Docker CLI; role changes are not exposed through an API.
 
 The current staff-protected routes are read-only. Before adding state-changing staff endpoints, implement and test CSRF protection, audit logging, and explicit per-action permissions. CORS is not a substitute for CSRF protection.
 
@@ -111,8 +111,8 @@ The current staff-protected routes are read-only. Before adding state-changing s
 Example: create an order (prices are calculated by the API from database values; clients must not submit prices).
 
 ```bash
-curl -X POST http://localhost:8088/api/orders \\
-  -H 'Content-Type: application/json' \\
+curl -X POST http://localhost:8088/api/orders \
+  -H 'Content-Type: application/json' \
   -d '{
     "customer_name": "Test Customer",
     "items": [
@@ -150,14 +150,14 @@ The API integration tests connect to a **dedicated disposable PostgreSQL databas
 Example using a temporary PostgreSQL container:
 
 ```bash
-docker run --rm --name aurelia-test-db \\
-  -e POSTGRES_USER=aurelia \\
-  -e POSTGRES_PASSWORD=aurelia_test \\
-  -e POSTGRES_DB=aurelia_test \\
+docker run --rm --name aurelia-test-db \
+  -e POSTGRES_USER=aurelia \
+  -e POSTGRES_PASSWORD=aurelia_test \
+  -e POSTGRES_DB=aurelia_test \
   -p 5433:5432 postgres:16-alpine
 
 # In another terminal:
-TEST_DATABASE_URL='postgres://aurelia:aurelia_test@localhost:5433/aurelia_test' \\
+TEST_DATABASE_URL='postgres://aurelia:aurelia_test@localhost:5433/aurelia_test' \
   cargo test --manifest-path services/api/Cargo.toml
 ```
 
