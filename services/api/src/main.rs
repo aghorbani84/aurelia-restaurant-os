@@ -258,10 +258,7 @@ async fn create_order(
     ))
 }
 
-async fn fetch_orders(
-    db: &PgPool,
-    active_only: bool,
-) -> Result<Response, ApiError> {
+async fn fetch_orders(db: &PgPool, active_only: bool) -> Result<Response, ApiError> {
     let rows = if active_only {
         sqlx::query_as::<_, (i64, String, String, String, i64)>(
             "SELECT id, order_number, customer_name, status, total_minor
@@ -299,10 +296,9 @@ async fn fetch_orders(
             .collect::<Vec<_>>(),
     )
     .into_response();
-    response.headers_mut().insert(
-        header::CACHE_CONTROL,
-        HeaderValue::from_static("no-store"),
-    );
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     Ok(response)
 }
 
@@ -521,12 +517,11 @@ mod tests {
         assert!(auth::create_staff(&db, "bad-role", password, "owner")
             .await
             .is_err());
-        let chef_role: String = sqlx::query_scalar(
-            "SELECT role FROM staff_users WHERE username = 'chef_01'",
-        )
-        .fetch_one(&db)
-        .await
-        .expect("provisioned chef account should exist");
+        let chef_role: String =
+            sqlx::query_scalar("SELECT role FROM staff_users WHERE username = 'chef_01'")
+                .fetch_one(&db)
+                .await
+                .expect("provisioned chef account should exist");
         assert_eq!(chef_role, "chef");
 
         let state = AppState {
