@@ -320,7 +320,7 @@ async fn list_admin_orders(
 async fn list_kitchen_orders(
     State(state): State<AppState>,
     headers: HeaderMap,
-) -> Result<Json<Vec<OrderSummary>>, ApiError> {
+) -> Result<Response, ApiError> {
     let staff = auth::current_staff(&state, &headers).await?;
     if !auth::can_view_kitchen_orders(&staff.role) {
         return Err(ApiError::Forbidden);
@@ -331,7 +331,7 @@ async fn list_kitchen_orders(
 async fn list_service_orders(
     State(state): State<AppState>,
     headers: HeaderMap,
-) -> Result<Json<Vec<OrderSummary>>, ApiError> {
+) -> Result<Response, ApiError> {
     let staff = auth::current_staff(&state, &headers).await?;
     if !auth::can_view_service_orders(&staff.role) {
         return Err(ApiError::Forbidden);
