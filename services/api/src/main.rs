@@ -405,6 +405,19 @@ async fn main() {
             println!("Initial AURELIA owner account created.");
             return;
         }
+        Some("create-staff") => {
+            let username = env::var("AURELIA_STAFF_USERNAME")
+                .expect("AURELIA_STAFF_USERNAME is required for create-staff");
+            let password = env::var("AURELIA_STAFF_PASSWORD")
+                .expect("AURELIA_STAFF_PASSWORD is required for create-staff");
+            let role = env::var("AURELIA_STAFF_ROLE")
+                .expect("AURELIA_STAFF_ROLE is required for create-staff");
+            auth::create_staff(&db, &username, &password, &role)
+                .await
+                .unwrap_or_else(|error| panic!("{error}"));
+            println!("AURELIA staff account created.");
+            return;
+        }
         Some(command) => panic!("unknown command: {command}"),
         None => {}
     }
