@@ -111,8 +111,7 @@ pub(crate) async fn bootstrap_owner(
 
     if has_staff {
         return Err(
-            "bootstrap-owner is disabled after the first staff account has been created"
-                .to_owned(),
+            "bootstrap-owner is disabled after the first staff account has been created".to_owned(),
         );
     }
 
@@ -211,16 +210,13 @@ fn session_cookie(token: &str, secure: bool) -> String {
 
 fn expired_session_cookie(secure: bool) -> String {
     let secure_attribute = if secure { "; Secure" } else { "" };
-    format!(
-        "{SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0{secure_attribute}"
-    )
+    format!("{SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0{secure_attribute}")
 }
 
 fn set_no_store(response: &mut Response) {
-    response.headers_mut().insert(
-        header::CACHE_CONTROL,
-        HeaderValue::from_static("no-store"),
-    );
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
 }
 
 pub(crate) async fn current_staff(
@@ -357,10 +353,7 @@ pub(crate) async fn logout(
     Ok(response)
 }
 
-async fn me(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<Response, ApiError> {
+async fn me(State(state): State<AppState>, headers: HeaderMap) -> Result<Response, ApiError> {
     let identity = current_staff(&state, &headers).await?;
     let mut response = Json(identity).into_response();
     set_no_store(&mut response);
