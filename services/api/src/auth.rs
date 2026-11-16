@@ -19,7 +19,6 @@ use crate::{ApiError, AppState};
 
 const SESSION_COOKIE: &str = "aurelia_session";
 const SESSION_TTL_SECONDS: i64 = 43_200;
-const SESSION_TTL_SQL: &str = "12 hours";
 
 #[derive(Deserialize)]
 pub(crate) struct LoginRequest {
@@ -214,7 +213,7 @@ pub(crate) fn can_view_service_orders(role: &str) -> bool {
     matches!(role, "owner" | "manager" | "waiter")
 }
 
-async fn login(
+pub(crate) async fn login(
     State(state): State<AppState>,
     Json(payload): Json<LoginRequest>,
 ) -> Result<Response, ApiError> {
@@ -223,8 +222,8 @@ async fn login(
         return Err(ApiError::Unauthorized);
     }
 
-    let user = sqlx::query_as::<_, (i64, String, String, bool)>(
-        "SELECT id, username, password_hash, is_active
+    let user = sqlx::query_as::<_, (i64, String, String, bool, String)>(
+        "SELECT id, username, password_hash, is_active, role
          FROM staff_users
          WHERE username = $1",
     )
@@ -233,7 +232,7 @@ async fn login(
     .await
     .map_err(|_| ApiError::Internal)?;
 
-    let Some((user_id, username, password_hash, is_active)) = user else {
+    let Some((user_id, username, password_hash, is_active, role)) = user else {
         return Err(ApiError::Unauthorized);
     };
 
@@ -249,10 +248,11 @@ async fn login(
 
     sqlx::query(
         "INSERT INTO staff_sessions (token_hash, staff_user_id, expires_at)
-         VALUES ($1, $2, now() + interval '12 hours')",
+         VALUES ($1, $2, now() + ($3 * interval '1 second'))",
     )
     .bind(token_hash)
     .bind(user_id)
+    .bind(SESSION_TTL_SECONDS)
     .execute(&state.db)
     .await
     .map_err(|_| ApiError::Internal)?;
@@ -260,11 +260,7 @@ async fn login(
     let identity = StaffIdentity {
         id: user_id,
         username,
-        role: sqlx::query_scalar("SELECT role FROM staff_users WHERE id = $1")
-            .bind(user_id)
-            .fetch_one(&state.db)
-            .await
-            .map_err(|_| ApiError::Internal)?,
+        role,
     };
 
     let cookie = session_cookie(&token, state.cookie_secure);
@@ -277,7 +273,7 @@ async fn login(
     Ok(response)
 }
 
-async fn logout(
+pub(crate) async fn logout(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
