@@ -54,6 +54,24 @@ unset AURELIA_ADMIN_PASSWORD AURELIA_ADMIN_USERNAME
 
 Usernames are normalized to lowercase ASCII and must be 3-32 characters using letters, digits, dots, underscores, or hyphens. Initial passwords must be 12-128 bytes. Passwords are stored as Argon2id hashes. The bootstrap command is serialized with a PostgreSQL advisory transaction lock and can create only the first staff account.
 
+Additional staff accounts can be provisioned by an operator with Docker access. This is a local administrative command, not a public API:
+
+\`\`\`bash
+export AURELIA_STAFF_USERNAME=chef_01
+export AURELIA_STAFF_ROLE=chef
+read -rsp 'Staff password (12-128 bytes): ' AURELIA_STAFF_PASSWORD
+printf '\\n'
+export AURELIA_STAFF_PASSWORD
+docker compose exec \\
+  -e AURELIA_STAFF_USERNAME \\
+  -e AURELIA_STAFF_PASSWORD \\
+  -e AURELIA_STAFF_ROLE \\
+  api aurelia-api create-staff
+unset AURELIA_STAFF_PASSWORD AURELIA_STAFF_USERNAME AURELIA_STAFF_ROLE
+\`\`\`
+
+Allowed roles for this command are \`manager\`, \`cashier\`, \`chef\`, and \`waiter\`. A currently active owner account must already exist. Creating another owner is intentionally not supported by this command.
+
 ## API
 
 The Rust API listens on port \`8080\) inside the Docker network. The OpenResty gateway listens on \`8088\) and proxies \`/api/\` to the API.
@@ -111,7 +129,7 @@ Order creation validates customer name and line quantities, checks menu item ava
 
 - Cross-origin API access is disabled by default. Set \`CORS_ALLOWED_ORIGINS\` to a comma-separated list of exact origins when a separate browser origin is required; wildcard (\`*\`) and \`null\` origins are rejected. The local Vite proxy uses same-origin requests and does not need CORS.
 - There is no customer authentication.
-- Staff account creation and role management beyond the one-time initial owner bootstrap are not implemented.
+- Staff account creation is available only through the local Docker CLI; no web staff-management UI or public staff-creation API exists.
 - Order status mutations, payment integration, full KDS, inventory, reservations, and accounting are not implemented.
 - The web UI is still a starter and is not yet connected to staff login or role-specific workspaces.
 - The Compose web service is the Vite development server, not a production frontend server.
