@@ -131,6 +131,54 @@ pub(crate) async fn bootstrap_owner(
         .map_err(|_| "could not commit owner bootstrap transaction".to_owned())
 }
 
+pub(crate) async fn create_staff(
+    db: &PgPool,
+    raw_username: &str,
+    password: &str,
+    role: &str,
+) -> Result<(), String> {
+    let username = normalize_username(raw_username)?;
+    validate_password(password)?;
+    if !matches!(role, "manager" | "cashier" | "chef" | "waiter") {
+        return Err("staff role must be manager, cashier, chef, or waiter".to_owned());
+    }
+    let password_hash = hash_password(password)?;
+
+    let mut tx = db
+        .begin()
+        .await
+        .map_err(|_| "could not start staff creation transaction".to_owned())?;
+
+    let has_owner: bool = sqlx::query_scalar(
+        "SELECT EXISTS(
+            SELECT 1 FROM staff_users
+            WHERE role = 'owner' AND is_active = TRUE
+        )",
+    )
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(|_| "could not verify an active owner account".to_owned())?;
+
+    if !has_owner {
+        return Err("an active owner account is required before creating staff".to_owned());
+    }
+
+    sqlx::query(
+        "INSERT INTO staff_users (username, password_hash, role)
+         VALUES ($1, $2, $3)",
+    )
+    .bind(username)
+    .bind(password_hash)
+    .bind(role)
+    .execute(&mut *tx)
+    .await
+    .map_err(|_| "could not create staff account; username may already exist".to_owned())?;
+
+    tx.commit()
+        .await
+        .map_err(|_| "could not commit staff creation transaction".to_owned())
+}
+
 fn hash_session_token(token: &str) -> Vec<u8> {
     Sha256::digest(token.as_bytes()).to_vec()
 }
