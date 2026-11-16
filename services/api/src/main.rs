@@ -509,6 +509,20 @@ mod tests {
             .await
             .is_err());
 
+        auth::create_staff(&db, "Chef_01", "a-strong-chef-password", "chef")
+            .await
+            .expect("an active owner should be able to provision staff");
+        assert!(auth::create_staff(&db, "bad-role", password, "owner")
+            .await
+            .is_err());
+        let chef_role: String = sqlx::query_scalar(
+            "SELECT role FROM staff_users WHERE username = 'chef_01'",
+        )
+        .fetch_one(&db)
+        .await
+        .expect("provisioned chef account should exist");
+        assert_eq!(chef_role, "chef");
+
         let state = AppState {
             db: db.clone(),
             cookie_secure: false,
@@ -522,6 +536,12 @@ mod tests {
         )
         .await;
         assert!(matches!(bad_login, Err(ApiError::Unauthorized)));
+        let sessions_after_bad_login: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM staff_sessions")
+                .fetch_one(&db)
+                .await
+                .expect("count sessions after failed login");
+        assert_eq!(sessions_after_bad_login, 0);
 
         let response = auth::login(
             State(state.clone()),
@@ -546,6 +566,17 @@ mod tests {
         assert!(!set_cookie.contains("; Secure"));
 
         let cookie_pair = set_cookie.split(';').next().expect("cookie pair");
+        let raw_token = cookie_pair
+            .strip_prefix("aurelia_session=")
+            .expect("session cookie name");
+        let stored_hash: Vec<u8> =
+            sqlx::query_scalar("SELECT token_hash FROM staff_sessions LIMIT 1")
+                .fetch_one(&db)
+                .await
+                .expect("session token hash should be stored");
+        assert_eq!(stored_hash.len(), 32);
+        assert_ne!(stored_hash, raw_token.as_bytes());
+
         let mut headers = HeaderMap::new();
         headers.insert(
             header::COOKIE,
@@ -557,6 +588,20 @@ mod tests {
             .expect("session should authenticate the owner");
         assert_eq!(identity.username, "owner_01");
         assert_eq!(identity.role, "owner");
+
+        sqlx::query(
+            "UPDATE staff_sessions
+             SET expires_at = now() - interval '1 second'
+             WHERE token_hash = $1",
+        )
+        .bind(stored_hash)
+        .execute(&db)
+        .await
+        .expect("expire the test session");
+        assert!(matches!(
+            auth::current_staff(&state, &headers).await,
+            Err(ApiError::Unauthorized)
+        ));
 
         let logout = auth::logout(State(state.clone()), headers.clone())
             .await
