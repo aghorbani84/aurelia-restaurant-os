@@ -233,12 +233,23 @@ pub(crate) async fn login(
     .map_err(|_| ApiError::Internal)?;
 
     let Some((user_id, username, password_hash, is_active, role)) = user else {
+        // Spend a password-hash operation on unknown usernames to reduce timing-based
+        // account enumeration. The gateway also applies a stricter per-IP login limit.
+        let _ = hash_password(&payload.password);
         return Err(ApiError::Unauthorized);
     };
 
     if !verify_password(&payload.password, &password_hash) || !is_active {
         return Err(ApiError::Unauthorized);
     }
+
+    sqlx::query(
+        "DELETE FROM staff_sessions
+         WHERE expires_at <= now() OR revoked_at IS NOT NULL",
+    )
+    .execute(&state.db)
+    .await
+    .map_err(|_| ApiError::Internal)?;
 
     let mut random_bytes = [0_u8; 32];
     let mut rng = OsRng;
@@ -341,6 +352,18 @@ mod tests {
 
         assert!(can_view_service_orders("waiter"));
         assert!(!can_view_service_orders("chef"));
+    }
+
+    #[test]
+    fn session_cookies_use_secure_attributes_by_default() {
+        let cookie = session_cookie("0123456789abcdef", true);
+        assert!(cookie.contains("HttpOnly"));
+        assert!(cookie.contains("SameSite=Lax"));
+        assert!(cookie.contains("; Secure"));
+        assert!(cookie.contains("Max-Age=43200"));
+
+        let local_cookie = session_cookie("0123456789abcdef", false);
+        assert!(!local_cookie.contains("; Secure"));
     }
 
     #[test]
