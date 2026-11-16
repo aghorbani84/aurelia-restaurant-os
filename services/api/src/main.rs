@@ -438,6 +438,8 @@ async fn main() {
 mod tests {
     use super::*;
 
+    static TEST_DB_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
     async fn test_database() -> PgPool {
         let database_url = env::var("TEST_DATABASE_URL")
             .expect("TEST_DATABASE_URL must point to a dedicated disposable test database");
@@ -482,6 +484,7 @@ mod tests {
 
     #[tokio::test]
     async fn bootstrap_owner_login_session_and_logout_work() {
+        let _guard = TEST_DB_LOCK.lock().await;
         let db = test_database().await;
         let password = "a-strong-owner-password";
 
@@ -554,6 +557,7 @@ mod tests {
 
     #[tokio::test]
     async fn order_creation_uses_database_prices_and_rejects_invalid_orders() {
+        let _guard = TEST_DB_LOCK.lock().await;
         let db = test_database().await;
 
         let available_item_id: i64 = sqlx::query_scalar(
