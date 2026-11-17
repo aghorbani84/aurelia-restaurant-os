@@ -1,4 +1,4 @@
-FROM rust:1.86-slim AS build
+FROM rust:1.100-slim-bookworm AS build
 WORKDIR /app
 COPY Cargo.toml build.rs ./
 COPY migrations ./migrations
