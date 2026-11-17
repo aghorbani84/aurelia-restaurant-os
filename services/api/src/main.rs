@@ -479,6 +479,15 @@ mod tests {
         db
     }
 
+    fn test_origin_headers() -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::ORIGIN,
+            HeaderValue::from_static("http://localhost:8088"),
+        );
+        headers
+    }
+
     async fn submit(
         db: &PgPool,
         customer_name: &str,
@@ -500,6 +509,7 @@ mod tests {
     #[tokio::test]
     async fn bootstrap_owner_login_session_and_logout_work() {
         let _guard = TEST_DB_LOCK.lock().await;
+        env::set_var("CSRF_ALLOWED_ORIGINS", "http://localhost:8088");
         let db = test_database().await;
         let password = "a-strong-owner-password";
 
@@ -528,8 +538,20 @@ mod tests {
             db: db.clone(),
             cookie_secure: false,
         };
+        let missing_origin_login = auth::login(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(auth::LoginRequest {
+                username: "owner_01".to_owned(),
+                password: password.to_owned(),
+            }),
+        )
+        .await;
+        assert!(matches!(missing_origin_login, Err(ApiError::Forbidden)));
+
         let bad_login = auth::login(
             State(state.clone()),
+            test_origin_headers(),
             Json(auth::LoginRequest {
                 username: "owner_01".to_owned(),
                 password: "wrong-password".to_owned(),
@@ -546,6 +568,7 @@ mod tests {
 
         let response = auth::login(
             State(state.clone()),
+            test_origin_headers(),
             Json(auth::LoginRequest {
                 username: "OWNER_01".to_owned(),
                 password: password.to_owned(),
@@ -582,6 +605,10 @@ mod tests {
         headers.insert(
             header::COOKIE,
             HeaderValue::from_bytes(cookie_pair.as_bytes()).expect("valid cookie pair"),
+        );
+        headers.insert(
+            header::ORIGIN,
+            HeaderValue::from_static("http://localhost:8088"),
         );
 
         let identity = auth::current_staff(&state, &headers)
