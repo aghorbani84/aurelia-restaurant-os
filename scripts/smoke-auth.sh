@@ -3,6 +3,7 @@ set -euo pipefail
 
 export POSTGRES_PASSWORD="aurelia-smoke-password"
 export COOKIE_SECURE=false
+export CSRF_ALLOWED_ORIGINS=http://localhost:8088
 
 tmp_dir="$(mktemp -d)"
 cleanup() {
@@ -38,6 +39,7 @@ unset AURELIA_ADMIN_USERNAME AURELIA_ADMIN_PASSWORD
 curl -fsS \
   -c "$tmp_dir/owner.cookies" \
   -H "Content-Type: application/json" \
+  -H "Origin: http://localhost:8088" \
   -d '{"username":"owner","password":"aurelia-owner-password-123"}' \
   http://localhost:8088/api/auth/login > "$tmp_dir/owner-login.json"
 
@@ -50,6 +52,7 @@ item_id="$(docker compose exec -T db psql -U aurelia -d aurelia -Atq \
 
 curl -fsS \
   -H "Content-Type: application/json" \
+  -H "Origin: http://localhost:8088" \
   -d "{\"customer_name\":\"Smoke Test\",\"items\":[{\"menu_item_id\":$item_id,\"quantity\":2}]}" \
   http://localhost:8088/api/orders > "$tmp_dir/order.json"
 grep -q '"total_minor":2500' "$tmp_dir/order.json"
@@ -71,6 +74,7 @@ unset AURELIA_STAFF_USERNAME AURELIA_STAFF_PASSWORD AURELIA_STAFF_ROLE
 curl -fsS \
   -c "$tmp_dir/chef.cookies" \
   -H "Content-Type: application/json" \
+  -H "Origin: http://localhost:8088" \
   -d '{"username":"chef","password":"aurelia-chef-password-123"}' \
   http://localhost:8088/api/auth/login > "$tmp_dir/chef-login.json"
 
@@ -87,6 +91,7 @@ fi
 
 logout_status="$(curl -sS -o /dev/null -w '%{http_code}' \
   -b "$tmp_dir/owner.cookies" -c "$tmp_dir/owner.cookies" \
+  -H "Origin: http://localhost:8088" \
   -X POST http://localhost:8088/api/auth/logout)"
 if [ "$logout_status" != "204" ]; then
   echo "Expected logout HTTP 204; received HTTP $logout_status" >&2
