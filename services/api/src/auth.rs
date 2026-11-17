@@ -33,7 +33,9 @@ fn origin_is_allowed(origin: Option<&str>, configured: &str) -> bool {
 }
 
 fn validate_request_origin(headers: &HeaderMap) -> Result<(), ApiError> {
-    let origin = headers.get(header::ORIGIN).and_then(|value| value.to_str().ok());
+    let origin = headers
+        .get(header::ORIGIN)
+        .and_then(|value| value.to_str().ok());
     let configured = std::env::var("CSRF_ALLOWED_ORIGINS").unwrap_or_default();
     if origin_is_allowed(origin, &configured) {
         Ok(())
