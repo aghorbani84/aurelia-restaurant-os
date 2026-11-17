@@ -20,6 +20,8 @@ export POSTGRES_PASSWORD='change-this-local-dev-password'
 export CORS_ALLOWED_ORIGINS='https://app.example.com,https://admin.example.com'
 # Secure cookies are enabled by default. Disable only for local plain-HTTP testing.
 export COOKIE_SECURE=true
+# Exact browser origins allowed to submit staff login/logout requests.
+export CSRF_ALLOWED_ORIGINS='http://localhost:5173,http://localhost:8088'
 docker compose up --build
 ```
 
@@ -91,6 +93,8 @@ The Rust API listens on port `8080` inside the Docker network. The OpenResty gat
 | GET | `/api/service/orders` | Owner, manager, waiter |
 
 Login creates a random 256-bit opaque session token. Only its SHA-256 hash is stored in PostgreSQL. The cookie is host-only, `HttpOnly`, `SameSite=Lax`, has a 12-hour lifetime, and is `Secure` by default. Logout revokes the server-side session and expires the cookie. Set `COOKIE_SECURE=false` only for local plain-HTTP testing; never disable it in an HTTPS deployment.
+
+Both login and logout require an exact `Origin` match against `CSRF_ALLOWED_ORIGINS`. Missing, `null`, wildcard, and unlisted origins are rejected. This is a separate CSRF defense, not a replacement for CORS. The Compose defaults are for local development; set the variable to the exact HTTPS frontend origin(s) before deployment.
 
 The login endpoint is limited to 10 requests per minute per client IP at the OpenResty gateway. Other `/api/` requests are limited to 120 per minute per client IP. The API is not host-published in Compose; keep it behind the gateway in this development topology.
 
