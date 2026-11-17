@@ -20,6 +20,28 @@ use crate::{ApiError, AppState};
 const SESSION_COOKIE: &str = "aurelia_session";
 const SESSION_TTL_SECONDS: i64 = 43_200;
 
+fn origin_is_allowed(origin: Option<&str>, configured: &str) -> bool {
+    let Some(origin) = origin else {
+        return false;
+    };
+    if origin == "null" {
+        return false;
+    }
+    configured.split(',').map(str::trim).any(|candidate| {
+        !candidate.is_empty() && candidate != "*" && candidate != "null" && candidate == origin
+    })
+}
+
+fn validate_request_origin(headers: &HeaderMap) -> Result<(), ApiError> {
+    let origin = headers.get(header::ORIGIN).and_then(|value| value.to_str().ok());
+    let configured = std::env::var("CSRF_ALLOWED_ORIGINS").unwrap_or_default();
+    if origin_is_allowed(origin, &configured) {
+        Ok(())
+    } else {
+        Err(ApiError::Forbidden)
+    }
+}
+
 #[derive(Deserialize)]
 pub(crate) struct LoginRequest {
     pub(crate) username: String,
@@ -259,8 +281,10 @@ pub(crate) fn can_view_service_orders(role: &str) -> bool {
 
 pub(crate) async fn login(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(payload): Json<LoginRequest>,
 ) -> Result<Response, ApiError> {
+    validate_request_origin(&headers)?;
     let username = normalize_username(&payload.username).map_err(|_| ApiError::Unauthorized)?;
     if payload.password.len() > 128 {
         return Err(ApiError::Unauthorized);
@@ -331,6 +355,7 @@ pub(crate) async fn logout(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
+    validate_request_origin(&headers)?;
     if let Some(token) = session_token(&headers) {
         sqlx::query(
             "UPDATE staff_sessions
@@ -425,5 +450,17 @@ mod tests {
             session_token(&headers),
             Some("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
         );
+    }
+
+    #[test]
+    fn mutating_auth_routes_require_an_exact_non_null_origin() {
+        let allowed = "https://app.example,https://admin.example";
+        assert!(origin_is_allowed(Some("https://app.example"), allowed));
+        assert!(origin_is_allowed(Some("https://admin.example"), allowed));
+        assert!(!origin_is_allowed(Some("https://evil.example"), allowed));
+        assert!(!origin_is_allowed(Some("https://app.example/"), allowed));
+        assert!(!origin_is_allowed(None, allowed));
+        assert!(!origin_is_allowed(Some("null"), "null"));
+        assert!(!origin_is_allowed(Some("https://evil.example"), "*"));
     }
 }
