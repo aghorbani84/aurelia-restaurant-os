@@ -22,6 +22,7 @@ static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
 struct AppState {
     db: PgPool,
     cookie_secure: bool,
+    csrf_allowed_origins: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -424,9 +425,17 @@ async fn main() {
         None => {}
     }
 
+    let csrf_allowed_origins = env::var("CSRF_ALLOWED_ORIGINS")
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|origin| !origin.is_empty())
+        .map(str::to_owned)
+        .collect();
     let state = AppState {
         db,
         cookie_secure: cookie_secure_from_env(),
+        csrf_allowed_origins,
     };
     let app = Router::new()
         .route("/health", get(health))
@@ -497,6 +506,7 @@ mod tests {
             State(AppState {
                 db: db.clone(),
                 cookie_secure: false,
+                csrf_allowed_origins: vec!["http://localhost:8088".to_owned()],
             }),
             Json(CreateOrderRequest {
                 customer_name: customer_name.to_owned(),
@@ -509,7 +519,6 @@ mod tests {
     #[tokio::test]
     async fn bootstrap_owner_login_session_and_logout_work() {
         let _guard = TEST_DB_LOCK.lock().await;
-        env::set_var("CSRF_ALLOWED_ORIGINS", "http://localhost:8088");
         let db = test_database().await;
         let password = "a-strong-owner-password";
 
@@ -537,6 +546,7 @@ mod tests {
         let state = AppState {
             db: db.clone(),
             cookie_secure: false,
+            csrf_allowed_origins: vec!["http://localhost:8088".to_owned()],
         };
         let missing_origin_login = auth::login(
             State(state.clone()),
