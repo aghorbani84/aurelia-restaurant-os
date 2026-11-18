@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { ArrowDown, ArrowLeft, Check, ChefHat, LoaderCircle, Minus, Plus, ShoppingBag, UtensilsCrossed } from 'lucide-react';
 import Scene from './Scene';
+import StaffPortal from './StaffPortal';
 
 type MenuCategory = { id: number; name: string; slug: string };
 type MenuItem = {
@@ -17,7 +18,7 @@ type CreatedOrder = { id: number; order_number: string; status: string; total_mi
 const formatAmount = (value: number) =>
   new Intl.NumberFormat('fa-IR', { maximumFractionDigits: 0 }).format(value);
 
-export default function App() {
+function Storefront() {
   const [items, setItems] = useState<MenuItem[]>([]);
   const [categories, setCategories] = useState<MenuCategory[]>([]);
   const [activeCategory, setActiveCategory] = useState<number | 'all'>('all');
@@ -124,6 +125,7 @@ export default function App() {
           <a href="#home">خانه</a>
           <a href="#menu">منو</a>
           <a href="#order">ثبت سفارش</a>
+          <a href="/staff">ورود کارکنان</a>
         </nav>
         <a className="cart-link" href="#order">
           <ShoppingBag size={17} />
@@ -231,4 +233,9 @@ export default function App() {
       </footer>
     </div>
   );
+}
+
+
+export default function App() {
+  return window.location.pathname === '/staff' ? <StaffPortal /> : <Storefront />;
 }

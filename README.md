@@ -7,7 +7,7 @@
 - **Database:** PostgreSQL 16
 - **Gateway:** OpenResty / LuaJIT
 
-> **Project status:** early development. PostgreSQL-backed menu and order APIs, staff login sessions, and role-scoped read-only order endpoints exist. The staff-management UI, order mutations, full kitchen display, inventory, reservations, accounting, payments, production deployment hardening, and full end-to-end browser tests are not implemented.
+> **Project status:** early development. PostgreSQL-backed menu and order APIs, staff login sessions, role-scoped read-only order endpoints, and a basic staff workspace exist. Staff account management, order mutations, full kitchen display, inventory, reservations, accounting, payments, production deployment hardening, and full end-to-end browser tests are not implemented.
 
 ## Run locally
 
@@ -29,7 +29,8 @@ Services:
 
 | Service | Local address | Purpose |
 |---|---|---|
-| Web | http://localhost:5173 | Vite development frontend |
+| Web storefront | http://localhost:5173 | Vite development frontend |
+| Staff workspace | http://localhost:5173/staff | Login and role-scoped read-only order summaries |
 | OpenResty gateway | http://localhost:8088 | Gateway and rate-limited API proxy |
 | Rust API | Internal Docker network only | API; not published on the host |
 | PostgreSQL | localhost:5432 | Local development database |
@@ -133,9 +134,9 @@ Order creation validates customer name and line quantities, checks menu item ava
 
 - Cross-origin API access is disabled by default. Set `CORS_ALLOWED_ORIGINS` to a comma-separated list of exact origins when a separate browser origin is required; wildcard (`*`) and `null` origins are rejected. The local Vite proxy uses same-origin requests and does not need CORS.
 - There is no customer authentication.
-- Staff account creation is available only through the local Docker CLI; no web staff-management UI or public staff-creation API exists.
+- Staff account creation is available only through the local Docker CLI; there is no web UI for creating staff accounts or changing roles, and no public staff-creation API exists.
 - Order status mutations, payment integration, full KDS, inventory, reservations, and accounting are not implemented.
-- The web UI is still a starter and is not yet connected to staff login or role-specific workspaces.
+- The `/staff` workspace supports login and read-only role-specific order summaries; the public storefront remains an early-stage interface.
 - The Compose web service is the Vite development server, not a production frontend server.
 - Schema changes are managed through versioned SQLx migrations in `services/api/migrations`.
 - CI results must be checked on the relevant GitHub Actions run; a pushed commit alone is not evidence of a successful build.
