@@ -479,7 +479,7 @@ mod tests {
             .expect("apply SQLx migrations to test database");
 
         sqlx::query(
-            "TRUNCATE TABLE staff_sessions, staff_users, order_lines, orders, menu_items, menu_categories RESTART IDENTITY CASCADE",
+            "TRUNCATE TABLE staff_audit_log, staff_sessions, staff_users, order_lines, orders, menu_items, menu_categories RESTART IDENTITY CASCADE",
         )
         .execute(&db)
         .await
@@ -525,6 +525,11 @@ mod tests {
         auth::bootstrap_owner(&db, "Owner_01", password)
             .await
             .expect("bootstrap should create the first owner");
+        let owner_id: i64 =
+            sqlx::query_scalar("SELECT id FROM staff_users WHERE username = 'owner_01'")
+                .fetch_one(&db)
+                .await
+                .expect("initial owner account should exist");
 
         assert!(auth::bootstrap_owner(&db, "second-owner", password)
             .await
@@ -536,12 +541,13 @@ mod tests {
         assert!(auth::create_staff(&db, "bad-role", password, "owner")
             .await
             .is_err());
-        let chef_role: String =
-            sqlx::query_scalar("SELECT role FROM staff_users WHERE username = 'chef_01'")
+        let chef: (i64, String) =
+            sqlx::query_as("SELECT id, role FROM staff_users WHERE username = 'chef_01'")
                 .fetch_one(&db)
                 .await
                 .expect("provisioned chef account should exist");
-        assert_eq!(chef_role, "chef");
+        let chef_id = chef.0;
+        assert_eq!(chef.1, "chef");
 
         let state = AppState {
             db: db.clone(),
@@ -649,6 +655,38 @@ mod tests {
             auth::current_staff(&state, &headers).await,
             Err(ApiError::Unauthorized)
         ));
+
+        let audit_events: Vec<(String, Option<i64>, Option<i64>, String)> = sqlx::query_as(
+            "SELECT event_type, actor_staff_user_id, subject_staff_user_id, subject_role
+             FROM staff_audit_log
+             ORDER BY id",
+        )
+        .fetch_all(&db)
+        .await
+        .expect("staff lifecycle audit events should be persisted");
+
+        assert_eq!(
+            audit_events.iter().map(|event| event.0.as_str()).collect::<Vec<_>>(),
+            vec![
+                "owner_bootstrapped",
+                "staff_provisioned_cli",
+                "staff_login_succeeded",
+                "staff_logout",
+            ],
+            "failed and origin-rejected logins must not create success audit events",
+        );
+        assert_eq!(audit_events[0].1, None);
+        assert_eq!(audit_events[0].2, Some(owner_id));
+        assert_eq!(audit_events[0].3, "owner");
+        assert_eq!(audit_events[1].1, None);
+        assert_eq!(audit_events[1].2, Some(chef_id));
+        assert_eq!(audit_events[1].3, "chef");
+        assert_eq!(audit_events[2].1, Some(owner_id));
+        assert_eq!(audit_events[2].2, Some(owner_id));
+        assert_eq!(audit_events[2].3, "owner");
+        assert_eq!(audit_events[3].1, Some(owner_id));
+        assert_eq!(audit_events[3].2, Some(owner_id));
+        assert_eq!(audit_events[3].3, "owner");
     }
 
     #[tokio::test]
