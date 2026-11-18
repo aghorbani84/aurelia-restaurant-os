@@ -666,7 +666,10 @@ mod tests {
         .expect("staff lifecycle audit events should be persisted");
 
         assert_eq!(
-            audit_events.iter().map(|event| event.0.as_str()).collect::<Vec<_>>(),
+            audit_events
+                .iter()
+                .map(|event| event.0.as_str())
+                .collect::<Vec<_>>(),
             vec![
                 "owner_bootstrapped",
                 "staff_provisioned_cli",
