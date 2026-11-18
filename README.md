@@ -109,7 +109,9 @@ The login endpoint is limited to 10 requests per minute per client IP at the Ope
 
 These are currently read-only order-summary endpoints. They are not a complete KDS or staff-management system. No staff-creation or role-change API is exposed yet. The initial owner and additional staff accounts are provisioned through the local Docker CLI; role changes are not exposed through an API.
 
-The current staff-protected routes are read-only. Before adding state-changing staff endpoints, implement and test CSRF protection, audit logging, and explicit per-action permissions. CORS is not a substitute for CSRF protection.
+The current staff-protected routes are read-only. Staff lifecycle events are written to `staff_audit_log` in the same database transaction as the successful operation: initial owner bootstrap, CLI staff provisioning, successful login, and logout. Failed login attempts and rejected Origin requests are not recorded as successful events. The log does not store passwords, session tokens, or request bodies. There is not yet an API or UI for browsing audit records; access is limited to trusted database operators.
+
+Before adding state-changing staff endpoints, implement and test CSRF protection for those routes and explicit per-action permissions. CORS is not a substitute for CSRF protection.
 
 ## Orders and money
 
