@@ -138,15 +138,25 @@ pub(crate) async fn bootstrap_owner(
         );
     }
 
-    sqlx::query(
+    let owner_id: i64 = sqlx::query_scalar(
         "INSERT INTO staff_users (username, password_hash, role)
-         VALUES ($1, $2, 'owner')",
+         VALUES ($1, $2, 'owner')
+         RETURNING id",
     )
     .bind(username)
     .bind(password_hash)
-    .execute(&mut *tx)
+    .fetch_one(&mut *tx)
     .await
     .map_err(|_| "could not create the initial owner account".to_owned())?;
+
+    sqlx::query(
+        "INSERT INTO staff_audit_log (event_type, subject_staff_user_id, subject_role)
+         VALUES ('owner_bootstrapped', $1, 'owner')",
+    )
+    .bind(owner_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(|_| "could not record owner bootstrap audit event".to_owned())?;
 
     tx.commit()
         .await
@@ -185,16 +195,27 @@ pub(crate) async fn create_staff(
         return Err("an active owner account is required before creating staff".to_owned());
     }
 
-    sqlx::query(
+    let staff_id: i64 = sqlx::query_scalar(
         "INSERT INTO staff_users (username, password_hash, role)
-         VALUES ($1, $2, $3)",
+         VALUES ($1, $2, $3)
+         RETURNING id",
     )
     .bind(username)
     .bind(password_hash)
     .bind(role)
-    .execute(&mut *tx)
+    .fetch_one(&mut *tx)
     .await
     .map_err(|_| "could not create staff account; username may already exist".to_owned())?;
+
+    sqlx::query(
+        "INSERT INTO staff_audit_log (event_type, subject_staff_user_id, subject_role)
+         VALUES ('staff_provisioned_cli', $1, $2)",
+    )
+    .bind(staff_id)
+    .bind(role)
+    .execute(&mut *tx)
+    .await
+    .map_err(|_| "could not record staff provisioning audit event".to_owned())?;
 
     tx.commit()
         .await
@@ -312,11 +333,13 @@ pub(crate) async fn login(
         return Err(ApiError::Unauthorized);
     }
 
+    let mut tx = state.db.begin().await.map_err(|_| ApiError::Internal)?;
+
     sqlx::query(
         "DELETE FROM staff_sessions
          WHERE expires_at <= now() OR revoked_at IS NOT NULL",
     )
-    .execute(&state.db)
+    .execute(&mut *tx)
     .await
     .map_err(|_| ApiError::Internal)?;
 
@@ -332,9 +355,22 @@ pub(crate) async fn login(
     )
     .bind(token_hash)
     .bind(user_id)
-    .execute(&state.db)
+    .execute(&mut *tx)
     .await
     .map_err(|_| ApiError::Internal)?;
+
+    sqlx::query(
+        "INSERT INTO staff_audit_log (
+            event_type, actor_staff_user_id, subject_staff_user_id, subject_role
+         ) VALUES ('staff_login_succeeded', $1, $1, $2)",
+    )
+    .bind(user_id)
+    .bind(&role)
+    .execute(&mut *tx)
+    .await
+    .map_err(|_| ApiError::Internal)?;
+
+    tx.commit().await.map_err(|_| ApiError::Internal)?;
 
     let identity = StaffIdentity {
         id: user_id,
@@ -358,15 +394,34 @@ pub(crate) async fn logout(
 ) -> Result<Response, ApiError> {
     validate_request_origin(&state, &headers)?;
     if let Some(token) = session_token(&headers) {
-        sqlx::query(
+        let mut tx = state.db.begin().await.map_err(|_| ApiError::Internal)?;
+        let staff_id: Option<i64> = sqlx::query_scalar(
             "UPDATE staff_sessions
-             SET revoked_at = COALESCE(revoked_at, now())
-             WHERE token_hash = $1",
+             SET revoked_at = now()
+             WHERE token_hash = $1 AND revoked_at IS NULL
+             RETURNING staff_user_id",
         )
         .bind(hash_session_token(token))
-        .execute(&state.db)
+        .fetch_optional(&mut *tx)
         .await
         .map_err(|_| ApiError::Internal)?;
+
+        if let Some(staff_id) = staff_id {
+            sqlx::query(
+                "INSERT INTO staff_audit_log (
+                    event_type, actor_staff_user_id, subject_staff_user_id, subject_role
+                 )
+                 SELECT 'staff_logout', id, id, role
+                 FROM staff_users
+                 WHERE id = $1",
+            )
+            .bind(staff_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|_| ApiError::Internal)?;
+        }
+
+        tx.commit().await.map_err(|_| ApiError::Internal)?;
     }
 
     let cookie = expired_session_cookie(state.cookie_secure);
