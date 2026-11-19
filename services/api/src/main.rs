@@ -914,8 +914,8 @@ mod tests {
         let cursor = first_page.next_cursor.expect("second page should exist");
 
         let (_, Json(second_page)) = list_audit_events(
-            State(state),
-            owner_headers,
+            State(state.clone()),
+            owner_headers.clone(),
             Query(AuditQuery {
                 limit: Some(2),
                 before_id: Some(cursor),
@@ -930,7 +930,7 @@ mod tests {
 
         assert!(matches!(
             list_audit_events(
-                State(state.clone()),
+                State(state),
                 owner_headers,
                 Query(AuditQuery {
                     limit: Some(0),
