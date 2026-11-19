@@ -372,7 +372,9 @@ async fn list_audit_events(
 
     let limit = query.limit.unwrap_or(50);
     if !(1..=100).contains(&limit) || query.before_id.is_some_and(|id| id <= 0) {
-        return Err(ApiError::BadRequest("limit must be 1-100 and before_id must be positive"));
+        return Err(ApiError::BadRequest(
+            "limit must be 1-100 and before_id must be positive",
+        ));
     }
 
     let rows = sqlx::query_as::<
@@ -908,9 +910,15 @@ mod tests {
         assert_eq!(headers.get(header::CACHE_CONTROL).unwrap(), "no-store");
         assert_eq!(first_page.events.len(), 2);
         assert_eq!(first_page.events[0].event_type, "staff_login_succeeded");
-        assert_eq!(first_page.events[0].actor_username.as_deref(), Some("owner_01"));
+        assert_eq!(
+            first_page.events[0].actor_username.as_deref(),
+            Some("owner_01")
+        );
         assert_eq!(first_page.events[1].event_type, "staff_login_succeeded");
-        assert_eq!(first_page.events[1].actor_username.as_deref(), Some("chef_01"));
+        assert_eq!(
+            first_page.events[1].actor_username.as_deref(),
+            Some("chef_01")
+        );
         let cursor = first_page.next_cursor.expect("second page should exist");
 
         let (_, Json(second_page)) = list_audit_events(
