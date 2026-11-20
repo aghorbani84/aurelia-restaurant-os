@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useState } from 'react';
-import { ArrowLeft, ChefHat, ClipboardList, LoaderCircle, LogOut, RefreshCw, ShieldCheck, UserRound } from 'lucide-react';
+import { ArrowLeft, ChefHat, ClipboardList, History, LoaderCircle, LogOut, RefreshCw, ShieldCheck, UserRound } from 'lucide-react';
 
 type StaffRole = 'owner' | 'manager' | 'cashier' | 'chef' | 'waiter';
 type StaffIdentity = { id: number; username: string; role: StaffRole };
@@ -10,6 +10,17 @@ type OrderSummary = {
   status: string;
   total_minor: number;
 };
+type AuditEvent = {
+  id: number;
+  event_type: string;
+  actor_staff_user_id: number | null;
+  actor_username: string | null;
+  subject_staff_user_id: number | null;
+  subject_username: string | null;
+  subject_role: StaffRole;
+  created_at: string;
+};
+type AuditPage = { events: AuditEvent[]; next_cursor: number | null };
 
 const roleLabels: Record<StaffRole, string> = {
   owner: 'مالک',
@@ -39,6 +50,38 @@ const statusLabels: Record<string, string> = {
 const formatAmount = (value: number) =>
   new Intl.NumberFormat('fa-IR', { maximumFractionDigits: 0 }).format(value);
 
+const auditEventLabels: Record<string, string> = {
+  owner_bootstrapped: 'ایجاد حساب مالک',
+  staff_provisioned_cli: 'ایجاد حساب کارمند',
+  staff_login_succeeded: 'ورود موفق',
+  staff_logout: 'خروج از حساب',
+};
+
+const formatAuditTime = (value: string) => {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat('fa-IR', { dateStyle: 'medium', timeStyle: 'short' }).format(date);
+};
+
+function isAuditPage(value: unknown): value is AuditPage {
+  if (!value || typeof value !== 'object') return false;
+  const candidate = value as Record<string, unknown>;
+  if (!Array.isArray(candidate.events)) return false;
+  if (candidate.next_cursor !== null && typeof candidate.next_cursor !== 'number') return false;
+  return candidate.events.every((entry) => {
+    if (!entry || typeof entry !== 'object') return false;
+    const event = entry as Record<string, unknown>;
+    return typeof event.id === 'number'
+      && typeof event.event_type === 'string'
+      && (event.actor_staff_user_id === null || typeof event.actor_staff_user_id === 'number')
+      && (event.actor_username === null || typeof event.actor_username === 'string')
+      && (event.subject_staff_user_id === null || typeof event.subject_staff_user_id === 'number')
+      && (event.subject_username === null || typeof event.subject_username === 'string')
+      && ['owner', 'manager', 'cashier', 'chef', 'waiter'].includes(String(event.subject_role))
+      && typeof event.created_at === 'string';
+  });
+}
+
 function isStaffIdentity(value: unknown): value is StaffIdentity {
   if (!value || typeof value !== 'object') return false;
   const candidate = value as Record<string, unknown>;
@@ -63,6 +106,11 @@ export default function StaffPortal() {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [refreshKey, setRefreshKey] = useState(0);
+  const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
+  const [auditCursor, setAuditCursor] = useState<number | null>(null);
+  const [auditLoading, setAuditLoading] = useState(false);
+  const [auditError, setAuditError] = useState('');
+  const [auditRefreshKey, setAuditRefreshKey] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -112,6 +160,62 @@ export default function StaffPortal() {
       });
     return () => { cancelled = true; };
   }, [identity, refreshKey]);
+
+  useEffect(() => {
+    if (identity?.role !== 'owner') {
+      setAuditEvents([]);
+      setAuditCursor(null);
+      setAuditError('');
+      return;
+    }
+    let cancelled = false;
+    setAuditLoading(true);
+    setAuditError('');
+    fetch('/api/admin/audit?limit=50', { credentials: 'same-origin', cache: 'no-store' })
+      .then(async (response) => {
+        if (!response.ok) throw await responseError(response, 'دریافت سوابق امنیتی ناموفق بود.');
+        const body: unknown = await response.json();
+        if (!isAuditPage(body)) throw new Error('ساختار سوابق امنیتی معتبر نیست.');
+        return body;
+      })
+      .then((page) => {
+        if (!cancelled) {
+          setAuditEvents(page.events);
+          setAuditCursor(page.next_cursor);
+        }
+      })
+      .catch((reason: unknown) => {
+        if (!cancelled) setAuditError(reason instanceof Error ? reason.message : 'دریافت سوابق ناموفق بود.');
+      })
+      .finally(() => {
+        if (!cancelled) setAuditLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [identity, auditRefreshKey]);
+
+  async function loadMoreAudit() {
+    if (identity?.role !== 'owner' || auditCursor === null || auditLoading) return;
+    setAuditLoading(true);
+    setAuditError('');
+    try {
+      const response = await fetch(`/api/admin/audit?limit=50&before_id=${auditCursor}`, {
+        credentials: 'same-origin',
+        cache: 'no-store',
+      });
+      if (!response.ok) throw await responseError(response, 'دریافت صفحه بعد ناموفق بود.');
+      const body: unknown = await response.json();
+      if (!isAuditPage(body)) throw new Error('ساختار سوابق امنیتی معتبر نیست.');
+      setAuditEvents((current) => {
+        const knownIds = new Set(current.map((event) => event.id));
+        return [...current, ...body.events.filter((event) => !knownIds.has(event.id))];
+      });
+      setAuditCursor(body.next_cursor);
+    } catch (reason) {
+      setAuditError(reason instanceof Error ? reason.message : 'دریافت صفحه بعد ناموفق بود.');
+    } finally {
+      setAuditLoading(false);
+    }
+  }
 
   async function login(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -239,6 +343,45 @@ export default function StaffPortal() {
               </div>
             )}
             <p className="staff-readonly-note">این پنل در این مرحله فقط سفارش‌ها را نمایش می‌دهد؛ تغییر وضعیت، مدیریت کارکنان و عملیات مالی هنوز فعال نیست.</p>
+            {identity.role === 'owner' && (
+              <section className="staff-audit-section" aria-labelledby="staff-audit-title">
+                <div className="staff-section-title">
+                  <div><History size={19} /><h2 id="staff-audit-title">سوابق امنیتی</h2></div>
+                  <button className="staff-ghost-button" onClick={() => setAuditRefreshKey((key) => key + 1)} disabled={auditLoading}>
+                    <RefreshCw size={15} /> تازه‌سازی
+                  </button>
+                </div>
+                {auditError && <p className="staff-feedback staff-error" role="alert">{auditError}</p>}
+                {auditLoading && auditEvents.length === 0 ? (
+                  <div className="staff-state"><LoaderCircle className="spin" /> در حال دریافت سوابق...</div>
+                ) : auditEvents.length === 0 && !auditError ? (
+                  <div className="staff-state">هنوز رویداد امنیتی ثبت نشده است.</div>
+                ) : (
+                  <div className="staff-audit-list">
+                    {auditEvents.map((event) => (
+                      <article className="staff-audit-card" key={event.id}>
+                        <div className="staff-audit-head">
+                          <strong>{auditEventLabels[event.event_type] ?? event.event_type}</strong>
+                          <time dateTime={event.created_at}>{formatAuditTime(event.created_at)}</time>
+                        </div>
+                        <div className="staff-audit-meta">
+                          <span>عامل: <b>{event.actor_username ?? 'سیستم'}</b></span>
+                          <span>حساب هدف: <b>{event.subject_username ?? '—'}</b></span>
+                          <span>نقش: <b>{roleLabels[event.subject_role]}</b></span>
+                          <span>شناسه رویداد: <b>{formatAmount(event.id)}</b></span>
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                )}
+                {auditCursor !== null && (
+                  <button className="staff-audit-more" onClick={loadMoreAudit} disabled={auditLoading}>
+                    {auditLoading ? <LoaderCircle className="spin" size={16} /> : null}
+                    {auditLoading ? 'در حال دریافت...' : 'نمایش رویدادهای قدیمی‌تر'}
+                  </button>
+                )}
+              </section>
+            )}
           </section>
         )}
 
