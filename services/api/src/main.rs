@@ -1,7 +1,7 @@
 mod auth;
 
 use axum::{
-    extract::State,
+    extract::{Query, State},
     http::{header, HeaderMap, HeaderValue, Method, StatusCode},
     response::{IntoResponse, Response},
     routing::get,
@@ -104,6 +104,30 @@ struct OrderSummary {
     customer_name: String,
     status: String,
     total_minor: i64,
+}
+
+#[derive(Deserialize)]
+struct AuditQuery {
+    limit: Option<i64>,
+    before_id: Option<i64>,
+}
+
+#[derive(Serialize)]
+struct AuditEvent {
+    id: i64,
+    event_type: String,
+    actor_staff_user_id: Option<i64>,
+    actor_username: Option<String>,
+    subject_staff_user_id: Option<i64>,
+    subject_username: Option<String>,
+    subject_role: String,
+    created_at: String,
+}
+
+#[derive(Serialize)]
+struct AuditPage {
+    events: Vec<AuditEvent>,
+    next_cursor: Option<i64>,
 }
 
 async fn health() -> Json<HealthResponse> {
@@ -336,6 +360,96 @@ async fn list_service_orders(
     fetch_orders(&state.db, true).await
 }
 
+async fn list_audit_events(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<AuditQuery>,
+) -> Result<(HeaderMap, Json<AuditPage>), ApiError> {
+    let staff = auth::current_staff(&state, &headers).await?;
+    if staff.role != "owner" {
+        return Err(ApiError::Forbidden);
+    }
+
+    let limit = query.limit.unwrap_or(50);
+    if !(1..=100).contains(&limit) || query.before_id.is_some_and(|id| id <= 0) {
+        return Err(ApiError::BadRequest(
+            "limit must be 1-100 and before_id must be positive",
+        ));
+    }
+
+    let rows = sqlx::query_as::<
+        _,
+        (
+            i64,
+            String,
+            Option<i64>,
+            Option<String>,
+            Option<i64>,
+            Option<String>,
+            String,
+            String,
+        ),
+    >(
+        "SELECT log.id, log.event_type,
+                log.actor_staff_user_id, actor.username,
+                log.subject_staff_user_id, subject.username,
+                log.subject_role, log.created_at::text
+         FROM staff_audit_log log
+         LEFT JOIN staff_users actor ON actor.id = log.actor_staff_user_id
+         LEFT JOIN staff_users subject ON subject.id = log.subject_staff_user_id
+         WHERE ($1::bigint IS NULL OR log.id < $1)
+         ORDER BY log.id DESC
+         LIMIT $2",
+    )
+    .bind(query.before_id)
+    .bind(limit + 1)
+    .fetch_all(&state.db)
+    .await
+    .map_err(|_| ApiError::Internal)?;
+
+    let has_more = rows.len() > limit as usize;
+    let events: Vec<AuditEvent> = rows
+        .into_iter()
+        .take(limit as usize)
+        .map(
+            |(
+                id,
+                event_type,
+                actor_staff_user_id,
+                actor_username,
+                subject_staff_user_id,
+                subject_username,
+                subject_role,
+                created_at,
+            )| AuditEvent {
+                id,
+                event_type,
+                actor_staff_user_id,
+                actor_username,
+                subject_staff_user_id,
+                subject_username,
+                subject_role,
+                created_at,
+            },
+        )
+        .collect();
+    let next_cursor = if has_more {
+        events.last().map(|event| event.id)
+    } else {
+        None
+    };
+
+    let mut response_headers = HeaderMap::new();
+    response_headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    Ok((
+        response_headers,
+        Json(AuditPage {
+            events,
+            next_cursor,
+        }),
+    ))
+}
+
 fn parse_allowed_origins(raw: &str) -> Result<Vec<HeaderValue>, String> {
     raw.split(',')
         .map(str::trim)
@@ -444,6 +558,7 @@ async fn main() {
         .route("/api/menu/items", get(list_menu_items))
         .route("/api/orders", axum::routing::post(create_order))
         .route("/api/admin/orders", get(list_admin_orders))
+        .route("/api/admin/audit", get(list_audit_events))
         .route("/api/kitchen/orders", get(list_kitchen_orders))
         .route("/api/service/orders", get(list_service_orders))
         .merge(auth::routes())
@@ -690,6 +805,149 @@ mod tests {
         assert_eq!(audit_events[3].1, Some(owner_id));
         assert_eq!(audit_events[3].2, Some(owner_id));
         assert_eq!(audit_events[3].3, "owner");
+    }
+
+    #[tokio::test]
+    async fn audit_endpoint_is_owner_only_and_cursor_paginated() {
+        let _guard = TEST_DB_LOCK.lock().await;
+        let db = test_database().await;
+        let owner_password = "a-strong-owner-password";
+        let chef_password = "a-strong-chef-password";
+
+        auth::bootstrap_owner(&db, "owner_01", owner_password)
+            .await
+            .expect("create owner for audit endpoint test");
+        auth::create_staff(&db, "chef_01", chef_password, "chef")
+            .await
+            .expect("create chef for audit endpoint test");
+
+        let state = AppState {
+            db: db.clone(),
+            cookie_secure: false,
+            csrf_allowed_origins: vec!["http://localhost:8088".to_owned()],
+        };
+        let query = Query(AuditQuery {
+            limit: Some(2),
+            before_id: None,
+        });
+        assert!(matches!(
+            list_audit_events(State(state.clone()), HeaderMap::new(), query).await,
+            Err(ApiError::Unauthorized)
+        ));
+
+        let chef_login = auth::login(
+            State(state.clone()),
+            test_origin_headers(),
+            Json(auth::LoginRequest {
+                username: "chef_01".to_owned(),
+                password: chef_password.to_owned(),
+            }),
+        )
+        .await
+        .expect("chef login should succeed");
+        let chef_cookie = chef_login
+            .headers()
+            .get(header::SET_COOKIE)
+            .expect("chef login cookie")
+            .to_str()
+            .expect("cookie header string")
+            .split(';')
+            .next()
+            .expect("cookie pair");
+        let mut chef_headers = test_origin_headers();
+        chef_headers.insert(
+            header::COOKIE,
+            HeaderValue::from_bytes(chef_cookie.as_bytes()).expect("valid chef cookie"),
+        );
+        assert!(matches!(
+            list_audit_events(
+                State(state.clone()),
+                chef_headers,
+                Query(AuditQuery {
+                    limit: Some(2),
+                    before_id: None,
+                }),
+            )
+            .await,
+            Err(ApiError::Forbidden)
+        ));
+
+        let owner_login = auth::login(
+            State(state.clone()),
+            test_origin_headers(),
+            Json(auth::LoginRequest {
+                username: "owner_01".to_owned(),
+                password: owner_password.to_owned(),
+            }),
+        )
+        .await
+        .expect("owner login should succeed");
+        let owner_cookie = owner_login
+            .headers()
+            .get(header::SET_COOKIE)
+            .expect("owner login cookie")
+            .to_str()
+            .expect("cookie header string")
+            .split(';')
+            .next()
+            .expect("cookie pair");
+        let mut owner_headers = test_origin_headers();
+        owner_headers.insert(
+            header::COOKIE,
+            HeaderValue::from_bytes(owner_cookie.as_bytes()).expect("valid owner cookie"),
+        );
+
+        let (headers, Json(first_page)) = list_audit_events(
+            State(state.clone()),
+            owner_headers.clone(),
+            Query(AuditQuery {
+                limit: Some(2),
+                before_id: None,
+            }),
+        )
+        .await
+        .expect("owner should read audit log");
+        assert_eq!(headers.get(header::CACHE_CONTROL).unwrap(), "no-store");
+        assert_eq!(first_page.events.len(), 2);
+        assert_eq!(first_page.events[0].event_type, "staff_login_succeeded");
+        assert_eq!(
+            first_page.events[0].actor_username.as_deref(),
+            Some("owner_01")
+        );
+        assert_eq!(first_page.events[1].event_type, "staff_login_succeeded");
+        assert_eq!(
+            first_page.events[1].actor_username.as_deref(),
+            Some("chef_01")
+        );
+        let cursor = first_page.next_cursor.expect("second page should exist");
+
+        let (_, Json(second_page)) = list_audit_events(
+            State(state.clone()),
+            owner_headers.clone(),
+            Query(AuditQuery {
+                limit: Some(2),
+                before_id: Some(cursor),
+            }),
+        )
+        .await
+        .expect("owner should read next audit page");
+        assert_eq!(second_page.events.len(), 2);
+        assert_eq!(second_page.events[0].event_type, "staff_provisioned_cli");
+        assert_eq!(second_page.events[1].event_type, "owner_bootstrapped");
+        assert_eq!(second_page.next_cursor, None);
+
+        assert!(matches!(
+            list_audit_events(
+                State(state),
+                owner_headers,
+                Query(AuditQuery {
+                    limit: Some(0),
+                    before_id: None,
+                }),
+            )
+            .await,
+            Err(ApiError::BadRequest(_))
+        ));
     }
 
     #[tokio::test]
