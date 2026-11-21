@@ -55,3 +55,17 @@
 .staff-notice{background:#172217;border:1px solid #49634a;color:#c1d6bd}
 @media(max-width:800px){.staff-order-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.staff-main{padding:55px 22px 80px}}
 @media(max-width:560px){.staff-topbar{height:72px;padding:0 5vw}.staff-back-link{font-size:10px}.staff-main{padding:42px 6vw 70px}.staff-panel{padding:24px}.staff-account-bar{align-items:flex-start;flex-direction:column}.staff-actions{width:100%}.staff-ghost-button{flex:1;justify-content:center}.staff-order-grid{grid-template-columns:1fr}.staff-section-title h2{font-size:15px}}
+
+/* Owner audit viewer */
+.staff-audit-section{display:flex;flex-direction:column;gap:14px}
+.staff-audit-list{display:grid;gap:10px}
+.staff-audit-card{background:#12130f;border:1px solid #ffffff18;padding:17px 19px}
+.staff-audit-head{display:flex;align-items:center;justify-content:space-between;gap:14px}
+.staff-audit-head strong{font-size:13px;font-weight:400;color:#d6bd91}
+.staff-audit-head time{font-size:10px;color:#85867e;white-space:nowrap}
+.staff-audit-meta{display:flex;flex-wrap:wrap;gap:10px 22px;margin-top:12px;color:#85867e;font-size:10px}
+.staff-audit-meta b{font-weight:400;color:#c7c1b5}
+.staff-audit-more{align-self:center;display:flex;align-items:center;justify-content:center;gap:8px;min-width:220px;padding:11px 16px;background:transparent;border:1px solid #b99a6577;color:#d6b77d;font-size:11px;cursor:pointer}
+.staff-audit-more:hover{background:#c5a46d;color:#17150f}
+.staff-audit-more:disabled{opacity:.5;cursor:not-allowed}
+@media(max-width:560px){.staff-audit-card{padding:14px}.staff-audit-head{align-items:flex-start;flex-direction:column;gap:7px}.staff-audit-meta{gap:8px 14px}}
