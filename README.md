@@ -110,7 +110,7 @@ The login endpoint is limited to 10 requests per minute per client IP at the Ope
 
 These are currently read-only order-summary endpoints. They are not a complete KDS or staff-management system. No staff-creation or role-change API is exposed yet. The initial owner and additional staff accounts are provisioned through the local Docker CLI; role changes are not exposed through an API.
 
-The current staff-protected routes are read-only. Staff lifecycle events are written to `staff_audit_log` in the same database transaction as the successful operation: initial owner bootstrap, CLI staff provisioning, successful login, and logout. Failed login attempts and rejected Origin requests are not recorded as successful events. The log does not store passwords, session tokens, or request bodies. `GET /api/admin/audit` is an owner-only, read-only API with a `limit` of 1-100 (default 50) and `before_id` cursor pagination; responses are `no-store`. There is not yet a browser UI for browsing audit records.
+The current staff-protected order routes are read-only. Staff lifecycle events are written to `staff_audit_log` in the same database transaction as the successful operation: initial owner bootstrap, CLI staff provisioning, successful login, and logout. Failed login attempts are also recorded as `staff_login_failed` events with the normalized attempted username when valid; malformed usernames are stored as null. Failed events are not associated with a staff account and do not store passwords, session tokens, or request bodies. Rejected Origin requests are not logged. `GET /api/admin/audit` is an owner-only, read-only API with a `limit` of 1-100 (default 50) and `before_id` cursor pagination; responses are `no-store`. The `/staff` workspace includes an owner-only, read-only audit viewer. Failed login audit records are subject to the same per-IP login rate limit; retention and automated pruning are not yet implemented.
 
 Before adding state-changing staff endpoints, implement and test CSRF protection for those routes and explicit per-action permissions. CORS is not a substitute for CSRF protection.
 
@@ -139,7 +139,7 @@ Order creation validates customer name and line quantities, checks menu item ava
 - There is no customer authentication.
 - Staff account creation is available only through the local Docker CLI; there is no web UI for creating staff accounts or changing roles, and no public staff-creation API exists.
 - Order status mutations, payment integration, full KDS, inventory, reservations, and accounting are not implemented.
-- The `/staff` workspace supports login and read-only role-specific order summaries; the public storefront remains an early-stage interface.
+- The `/staff` workspace supports login, read-only role-specific order summaries, and owner-only audit viewing; the public storefront remains an early-stage interface.
 - The Compose web service is the Vite development server, not a production frontend server.
 - Schema changes are managed through versioned SQLx migrations in `services/api/migrations`.
 - CI results must be checked on the relevant GitHub Actions run; a pushed commit alone is not evidence of a successful build.
