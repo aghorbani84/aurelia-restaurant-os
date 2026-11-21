@@ -715,7 +715,10 @@ mod tests {
             }),
         )
         .await;
-        assert!(matches!(malformed_username_login, Err(ApiError::Unauthorized)));
+        assert!(matches!(
+            malformed_username_login,
+            Err(ApiError::Unauthorized)
+        ));
 
         let oversized_password_login = auth::login(
             State(state.clone()),
@@ -726,7 +729,10 @@ mod tests {
             }),
         )
         .await;
-        assert!(matches!(oversized_password_login, Err(ApiError::Unauthorized)));
+        assert!(matches!(
+            oversized_password_login,
+            Err(ApiError::Unauthorized)
+        ));
 
         let sessions_after_bad_login: i64 =
             sqlx::query_scalar("SELECT COUNT(*) FROM staff_sessions")
@@ -735,16 +741,15 @@ mod tests {
                 .expect("count sessions after failed login");
         assert_eq!(sessions_after_bad_login, 0);
 
-        let failed_attempts: Vec<(Option<String>, Option<String>, Option<i64>)> =
-            sqlx::query_as(
-                "SELECT attempted_username, subject_role, subject_staff_user_id
-                 FROM staff_audit_log
-                 WHERE event_type = 'staff_login_failed'
-                 ORDER BY id",
-            )
-            .fetch_all(&db)
-            .await
-            .expect("failed login attempts should be recorded");
+        let failed_attempts: Vec<(Option<String>, Option<String>, Option<i64>)> = sqlx::query_as(
+            "SELECT attempted_username, subject_role, subject_staff_user_id
+             FROM staff_audit_log
+             WHERE event_type = 'staff_login_failed'
+             ORDER BY id",
+        )
+        .fetch_all(&db)
+        .await
+        .expect("failed login attempts should be recorded");
         assert_eq!(
             failed_attempts,
             vec![
