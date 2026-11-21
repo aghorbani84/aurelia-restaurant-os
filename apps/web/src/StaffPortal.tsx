@@ -17,7 +17,8 @@ type AuditEvent = {
   actor_username: string | null;
   subject_staff_user_id: number | null;
   subject_username: string | null;
-  subject_role: StaffRole;
+  attempted_username: string | null;
+  subject_role: StaffRole | null;
   created_at: string;
 };
 type AuditPage = { events: AuditEvent[]; next_cursor: number | null };
@@ -54,6 +55,7 @@ const auditEventLabels: Record<string, string> = {
   owner_bootstrapped: 'ایجاد حساب مالک',
   staff_provisioned_cli: 'ایجاد حساب کارمند',
   staff_login_succeeded: 'ورود موفق',
+  staff_login_failed: 'ورود ناموفق',
   staff_logout: 'خروج از حساب',
 };
 
@@ -77,7 +79,8 @@ function isAuditPage(value: unknown): value is AuditPage {
       && (event.actor_username === null || typeof event.actor_username === 'string')
       && (event.subject_staff_user_id === null || typeof event.subject_staff_user_id === 'number')
       && (event.subject_username === null || typeof event.subject_username === 'string')
-      && ['owner', 'manager', 'cashier', 'chef', 'waiter'].includes(String(event.subject_role))
+      && (event.attempted_username === null || typeof event.attempted_username === 'string')
+      && (event.subject_role === null || ['owner', 'manager', 'cashier', 'chef', 'waiter'].includes(String(event.subject_role)))
       && typeof event.created_at === 'string';
   });
 }
@@ -365,9 +368,9 @@ export default function StaffPortal() {
                           <time dateTime={event.created_at}>{formatAuditTime(event.created_at)}</time>
                         </div>
                         <div className="staff-audit-meta">
-                          <span>عامل: <b>{event.actor_username ?? 'سیستم'}</b></span>
-                          <span>حساب هدف: <b>{event.subject_username ?? '—'}</b></span>
-                          <span>نقش: <b>{roleLabels[event.subject_role]}</b></span>
+                          <span>عامل: <b>{event.actor_username ?? (event.event_type === 'staff_login_failed' ? 'بدون نشست' : 'سیستم')}</b></span>
+                          <span>{event.event_type === 'staff_login_failed' ? 'نام کاربری تلاش‌شده' : 'حساب هدف'}: <b>{event.subject_username ?? event.attempted_username ?? '—'}</b></span>
+                          <span>نقش: <b>{event.subject_role ? roleLabels[event.subject_role] : 'نامشخص'}</b></span>
                           <span>شناسه رویداد: <b>{formatAmount(event.id)}</b></span>
                         </div>
                       </article>
