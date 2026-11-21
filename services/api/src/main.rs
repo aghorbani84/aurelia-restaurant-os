@@ -116,11 +116,12 @@ struct AuditQuery {
 struct AuditEvent {
     id: i64,
     event_type: String,
+    attempted_username: Option<String>,
     actor_staff_user_id: Option<i64>,
     actor_username: Option<String>,
     subject_staff_user_id: Option<i64>,
     subject_username: Option<String>,
-    subject_role: String,
+    subject_role: Option<String>,
     created_at: String,
 }
 
@@ -382,15 +383,16 @@ async fn list_audit_events(
         (
             i64,
             String,
-            Option<i64>,
             Option<String>,
             Option<i64>,
             Option<String>,
-            String,
+            Option<i64>,
+            Option<String>,
+            Option<String>,
             String,
         ),
     >(
-        "SELECT log.id, log.event_type,
+        "SELECT log.id, log.event_type, log.attempted_username,
                 log.actor_staff_user_id, actor.username,
                 log.subject_staff_user_id, subject.username,
                 log.subject_role, log.created_at::text
@@ -415,6 +417,7 @@ async fn list_audit_events(
             |(
                 id,
                 event_type,
+                attempted_username,
                 actor_staff_user_id,
                 actor_username,
                 subject_staff_user_id,
@@ -424,6 +427,7 @@ async fn list_audit_events(
             )| AuditEvent {
                 id,
                 event_type,
+                attempted_username,
                 actor_staff_user_id,
                 actor_username,
                 subject_staff_user_id,
@@ -690,12 +694,72 @@ mod tests {
         )
         .await;
         assert!(matches!(bad_login, Err(ApiError::Unauthorized)));
+
+        let unknown_login = auth::login(
+            State(state.clone()),
+            test_origin_headers(),
+            Json(auth::LoginRequest {
+                username: "ghost_01".to_owned(),
+                password: "wrong-password".to_owned(),
+            }),
+        )
+        .await;
+        assert!(matches!(unknown_login, Err(ApiError::Unauthorized)));
+
+        let malformed_username_login = auth::login(
+            State(state.clone()),
+            test_origin_headers(),
+            Json(auth::LoginRequest {
+                username: "invalid username".to_owned(),
+                password: "wrong-password".to_owned(),
+            }),
+        )
+        .await;
+        assert!(matches!(
+            malformed_username_login,
+            Err(ApiError::Unauthorized)
+        ));
+
+        let oversized_password_login = auth::login(
+            State(state.clone()),
+            test_origin_headers(),
+            Json(auth::LoginRequest {
+                username: "owner_01".to_owned(),
+                password: "x".repeat(129),
+            }),
+        )
+        .await;
+        assert!(matches!(
+            oversized_password_login,
+            Err(ApiError::Unauthorized)
+        ));
+
         let sessions_after_bad_login: i64 =
             sqlx::query_scalar("SELECT COUNT(*) FROM staff_sessions")
                 .fetch_one(&db)
                 .await
                 .expect("count sessions after failed login");
         assert_eq!(sessions_after_bad_login, 0);
+
+        let failed_attempts: Vec<(Option<String>, Option<String>, Option<i64>)> = sqlx::query_as(
+            "SELECT attempted_username, subject_role, subject_staff_user_id
+             FROM staff_audit_log
+             WHERE event_type = 'staff_login_failed'
+             ORDER BY id",
+        )
+        .fetch_all(&db)
+        .await
+        .expect("failed login attempts should be recorded");
+        assert_eq!(
+            failed_attempts,
+            vec![
+                (Some("owner_01".to_owned()), None, None),
+                (Some("ghost_01".to_owned()), None, None),
+                (None, None, None),
+                (Some("owner_01".to_owned()), None, None),
+            ],
+            "failed logins must record only a normalized username when valid, never a password or account association",
+        );
 
         let response = auth::login(
             State(state.clone()),
@@ -771,8 +835,15 @@ mod tests {
             Err(ApiError::Unauthorized)
         ));
 
-        let audit_events: Vec<(String, Option<i64>, Option<i64>, String)> = sqlx::query_as(
-            "SELECT event_type, actor_staff_user_id, subject_staff_user_id, subject_role
+        let audit_events: Vec<(
+            String,
+            Option<i64>,
+            Option<i64>,
+            Option<String>,
+            Option<String>,
+        )> = sqlx::query_as(
+            "SELECT event_type, actor_staff_user_id, subject_staff_user_id,
+                    subject_role, attempted_username
              FROM staff_audit_log
              ORDER BY id",
         )
@@ -788,23 +859,37 @@ mod tests {
             vec![
                 "owner_bootstrapped",
                 "staff_provisioned_cli",
+                "staff_login_failed",
+                "staff_login_failed",
+                "staff_login_failed",
+                "staff_login_failed",
                 "staff_login_succeeded",
                 "staff_logout",
             ],
-            "failed and origin-rejected logins must not create success audit events",
         );
         assert_eq!(audit_events[0].1, None);
         assert_eq!(audit_events[0].2, Some(owner_id));
-        assert_eq!(audit_events[0].3, "owner");
+        assert_eq!(audit_events[0].3.as_deref(), Some("owner"));
         assert_eq!(audit_events[1].1, None);
         assert_eq!(audit_events[1].2, Some(chef_id));
-        assert_eq!(audit_events[1].3, "chef");
-        assert_eq!(audit_events[2].1, Some(owner_id));
-        assert_eq!(audit_events[2].2, Some(owner_id));
-        assert_eq!(audit_events[2].3, "owner");
-        assert_eq!(audit_events[3].1, Some(owner_id));
-        assert_eq!(audit_events[3].2, Some(owner_id));
-        assert_eq!(audit_events[3].3, "owner");
+        assert_eq!(audit_events[1].3.as_deref(), Some("chef"));
+        for failed in &audit_events[2..6] {
+            assert_eq!(failed.1, None);
+            assert_eq!(failed.2, None);
+            assert_eq!(failed.3, None);
+        }
+        assert_eq!(audit_events[2].4.as_deref(), Some("owner_01"));
+        assert_eq!(audit_events[3].4.as_deref(), Some("ghost_01"));
+        assert_eq!(audit_events[4].4, None);
+        assert_eq!(audit_events[5].4.as_deref(), Some("owner_01"));
+        assert_eq!(audit_events[6].1, Some(owner_id));
+        assert_eq!(audit_events[6].2, Some(owner_id));
+        assert_eq!(audit_events[6].3.as_deref(), Some("owner"));
+        assert_eq!(audit_events[6].4, None);
+        assert_eq!(audit_events[7].1, Some(owner_id));
+        assert_eq!(audit_events[7].2, Some(owner_id));
+        assert_eq!(audit_events[7].3.as_deref(), Some("owner"));
+        assert_eq!(audit_events[7].4, None);
     }
 
     #[tokio::test]

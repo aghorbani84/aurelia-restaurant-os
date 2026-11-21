@@ -222,6 +222,21 @@ pub(crate) async fn create_staff(
         .map_err(|_| "could not commit staff creation transaction".to_owned())
 }
 
+async fn record_failed_login(
+    db: &PgPool,
+    attempted_username: Option<&str>,
+) -> Result<(), ApiError> {
+    sqlx::query(
+        "INSERT INTO staff_audit_log (event_type, attempted_username)
+         VALUES ('staff_login_failed', $1)",
+    )
+    .bind(attempted_username)
+    .execute(db)
+    .await
+    .map_err(|_| ApiError::Internal)?;
+    Ok(())
+}
+
 fn hash_session_token(token: &str) -> Vec<u8> {
     Sha256::digest(token.as_bytes()).to_vec()
 }
@@ -307,8 +322,15 @@ pub(crate) async fn login(
     Json(payload): Json<LoginRequest>,
 ) -> Result<Response, ApiError> {
     validate_request_origin(&state, &headers)?;
-    let username = normalize_username(&payload.username).map_err(|_| ApiError::Unauthorized)?;
+    let username = match normalize_username(&payload.username) {
+        Ok(username) => username,
+        Err(_) => {
+            record_failed_login(&state.db, None).await?;
+            return Err(ApiError::Unauthorized);
+        }
+    };
     if payload.password.len() > 128 {
+        record_failed_login(&state.db, Some(&username)).await?;
         return Err(ApiError::Unauthorized);
     }
 
@@ -317,7 +339,7 @@ pub(crate) async fn login(
          FROM staff_users
          WHERE username = $1",
     )
-    .bind(username)
+    .bind(&username)
     .fetch_optional(&state.db)
     .await
     .map_err(|_| ApiError::Internal)?;
@@ -326,10 +348,12 @@ pub(crate) async fn login(
         // Spend a password-hash operation on unknown usernames to reduce timing-based
         // account enumeration. The gateway also applies a stricter per-IP login limit.
         let _ = hash_password(&payload.password);
+        record_failed_login(&state.db, Some(&username)).await?;
         return Err(ApiError::Unauthorized);
     };
 
     if !verify_password(&payload.password, &password_hash) || !is_active {
+        record_failed_login(&state.db, Some(&username)).await?;
         return Err(ApiError::Unauthorized);
     }
 
