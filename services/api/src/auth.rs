@@ -339,7 +339,7 @@ pub(crate) async fn login(
          FROM staff_users
          WHERE username = $1",
     )
-    .bind(username)
+    .bind(&username)
     .fetch_optional(&state.db)
     .await
     .map_err(|_| ApiError::Internal)?;
