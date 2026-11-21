@@ -47,6 +47,21 @@ curl -fsS -b "$tmp_dir/owner.cookies" \
   http://localhost:8088/api/auth/me > "$tmp_dir/owner-me.json"
 grep -q '"role":"owner"' "$tmp_dir/owner-me.json"
 
+failed_login_status="$(curl -sS -o "$tmp_dir/failed-login.json" -w '%{http_code}' \
+  -H "Content-Type: application/json" \
+  -H "Origin: http://localhost:8088" \
+  -d '{"username":"intruder_01","password":"incorrect-password"}' \
+  http://localhost:8088/api/auth/login)"
+if [ "$failed_login_status" != "401" ]; then
+  echo "Invalid staff credentials should return HTTP 401; received HTTP $failed_login_status" >&2
+  exit 1
+fi
+
+curl -fsS -b "$tmp_dir/owner.cookies" \
+  http://localhost:8088/api/admin/audit?limit=50 > "$tmp_dir/audit.json"
+grep -q '"event_type":"staff_login_failed"' "$tmp_dir/audit.json"
+grep -q '"attempted_username":"intruder_01"' "$tmp_dir/audit.json"
+
 item_id="$(docker compose exec -T db psql -U aurelia -d aurelia -Atq \
   -c "INSERT INTO menu_items (name, price_minor, available) VALUES ('Smoke Meal', 1250, TRUE) RETURNING id;")"
 
@@ -86,6 +101,13 @@ admin_status="$(curl -sS -o "$tmp_dir/chef-admin.json" -w '%{http_code}' \
   -b "$tmp_dir/chef.cookies" http://localhost:8088/api/admin/orders)"
 if [ "$admin_status" != "403" ]; then
   echo "Chef role should be forbidden from admin orders; received HTTP $admin_status" >&2
+  exit 1
+fi
+
+audit_status="$(curl -sS -o "$tmp_dir/chef-audit.json" -w '%{http_code}' \
+  -b "$tmp_dir/chef.cookies" http://localhost:8088/api/admin/audit)"
+if [ "$audit_status" != "403" ]; then
+  echo "Chef role should be forbidden from audit records; received HTTP $audit_status" >&2
   exit 1
 fi
 
