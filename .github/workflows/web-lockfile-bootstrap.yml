@@ -1,0 +1,28 @@
+name: Web Lockfile Bootstrap
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "apps/web/package.json"
+      - ".github/workflows/web-lockfile-bootstrap.yml"
+
+jobs:
+  lockfile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Generate lockfile from exact package versions
+        run: cd apps/web && npm install --package-lock-only --ignore-scripts
+      - name: Upload generated lockfile
+        uses: actions/upload-artifact@v4
+        with:
+          name: aurelia-web-package-lock
+          path: apps/web/package-lock.json
+          if-no-files-found: error
+          retention-days: 1
+      - name: Verify clean lockfile install and production build
+        run: cd apps/web && npm ci && npm run build
