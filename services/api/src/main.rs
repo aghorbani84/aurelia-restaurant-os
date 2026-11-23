@@ -1065,6 +1065,15 @@ mod tests {
                 .expect("provisioned chef account should exist");
         let chef_id = chef.0;
         assert_eq!(chef.1, "chef");
+        let chef_membership: (i64, String) = sqlx::query_as(
+            "SELECT restaurant_id, role FROM restaurant_staff_memberships
+             WHERE staff_user_id = $1 AND is_active = TRUE",
+        )
+        .bind(chef_id)
+        .fetch_one(&db)
+        .await
+        .expect("CLI-created staff should receive a default restaurant membership");
+        assert_eq!(chef_membership, (1, "chef".to_owned()));
 
         let state = AppState {
             db: db.clone(),
@@ -1490,14 +1499,68 @@ mod tests {
         assert_eq!(created.total_minor, 25_000);
         assert_eq!(created.status, "pending");
 
-        let saved_line: (i32, i64) = sqlx::query_as(
-            "SELECT quantity, unit_price_minor FROM order_lines WHERE order_id = $1",
+        let saved_line: (i32, i64, i64, i64) = sqlx::query_as(
+            "SELECT quantity, unit_price_minor, restaurant_id, order_id
+             FROM order_lines WHERE order_id = $1",
         )
         .bind(created.id)
         .fetch_one(&db)
         .await
         .expect("persisted order line should exist");
-        assert_eq!(saved_line, (2, 12_500));
+        assert_eq!(saved_line, (2, 12_500, 1, created.id));
+
+        let second_restaurant_id: i64 = sqlx::query_scalar(
+            "INSERT INTO restaurants (slug, name, status)
+             VALUES ($1, 'Cart Isolation Restaurant', 'active')
+             RETURNING id",
+        )
+        .bind(format!("cart-test-{}", Uuid::new_v4().simple()))
+        .fetch_one(&db)
+        .await
+        .expect("create second restaurant for cart test");
+        let second_restaurant_item_id: i64 = sqlx::query_scalar(
+            "INSERT INTO menu_items (restaurant_id, name, price_minor, available)
+             VALUES ($1, 'Second Restaurant Dish', 7000, TRUE)
+             RETURNING id",
+        )
+        .bind(second_restaurant_id)
+        .fetch_one(&db)
+        .await
+        .expect("create second restaurant dish");
+
+        assert!(matches!(
+            submit(
+                &db,
+                "Integration Test",
+                vec![
+                    OrderItemInput {
+                        menu_item_id: available_item_id,
+                        quantity: 1,
+                    },
+                    OrderItemInput {
+                        menu_item_id: second_restaurant_item_id,
+                        quantity: 1,
+                    },
+                ],
+            )
+            .await,
+            Err(ApiError::BadRequest(_))
+        ));
+
+        let filtered_items = list_menu_items(
+            State(AppState {
+                db: db.clone(),
+                cookie_secure: false,
+                csrf_allowed_origins: vec![],
+            }),
+            Query(RestaurantFilter {
+                restaurant_id: Some(second_restaurant_id),
+            }),
+        )
+        .await
+        .expect("tenant-filtered menu query should work");
+        assert_eq!(filtered_items.0.len(), 1);
+        assert_eq!(filtered_items.0[0].restaurant_id, second_restaurant_id);
 
         let unavailable_item_id: i64 = sqlx::query_scalar(
             "INSERT INTO menu_items (name, price_minor, available)
