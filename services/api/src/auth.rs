@@ -325,17 +325,6 @@ pub(crate) async fn current_staff(
     Ok(staff)
 }
 
-pub(crate) fn can_view_admin_orders(role: &str) -> bool {
-    matches!(role, "owner" | "manager" | "cashier")
-}
-
-pub(crate) fn can_view_kitchen_orders(role: &str) -> bool {
-    matches!(role, "owner" | "manager" | "chef")
-}
-
-pub(crate) fn can_view_service_orders(role: &str) -> bool {
-    matches!(role, "owner" | "manager" | "waiter")
-}
 
 pub(crate) async fn login(
     State(state): State<AppState>,
