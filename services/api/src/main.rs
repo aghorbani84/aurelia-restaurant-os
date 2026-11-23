@@ -1585,11 +1585,26 @@ mod tests {
             .expect("apply SQLx migrations to test database");
 
         sqlx::query(
-            "TRUNCATE TABLE staff_audit_log, staff_sessions, staff_users, order_status_events, order_lines, orders, menu_items, menu_categories RESTART IDENTITY CASCADE",
+            "TRUNCATE TABLE staff_audit_log, staff_sessions, staff_users,
+             restaurant_applications, restaurant_staff_memberships,
+             order_status_events, order_lines, orders, menu_items, menu_categories,
+             restaurants RESTART IDENTITY CASCADE",
         )
         .execute(&db)
         .await
         .expect("reset dedicated test database");
+
+        sqlx::query(
+            "INSERT INTO restaurants (id, slug, name, status, is_default)
+             VALUES (1, 'legacy-default', 'AURELIA Legacy Restaurant', 'active', TRUE)",
+        )
+        .execute(&db)
+        .await
+        .expect("reseed default restaurant for tests");
+        sqlx::query("SELECT setval('restaurants_id_seq', 1, TRUE)")
+            .execute(&db)
+            .await
+            .expect("reset restaurant sequence");
 
         db
     }
