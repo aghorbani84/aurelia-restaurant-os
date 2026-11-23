@@ -106,6 +106,18 @@ function Storefront() {
     });
   }, [items, loading]);
 
+  useEffect(() => {
+    if (!cartOpen && !pendingSwitchItem && !order) return;
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      setCartOpen(false);
+      setPendingSwitchItem(null);
+      setOrder(null);
+    };
+    window.addEventListener('keydown', handleEscape);
+    return () => window.removeEventListener('keydown', handleEscape);
+  }, [cartOpen, pendingSwitchItem, order]);
+
   const activeRestaurant = restaurants.find((restaurant) => restaurant.id === activeRestaurantId) ?? null;
   const cartLines = useMemo<CartLine[]>(
     () => items.filter((item) => cart[item.id] > 0).map((item) => ({ ...item, quantity: cart[item.id] })),
@@ -341,7 +353,7 @@ function Storefront() {
       </footer>
 
       {cartOpen && <div className="cart-backdrop" onClick={() => setCartOpen(false)}>
-        <aside className="cart-drawer" onClick={(event) => event.stopPropagation()} aria-label="سبد سفارش">
+        <aside className="cart-drawer" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()} aria-label="سبد سفارش">
           <div className="cart-drawer-header"><h2>سبد شما</h2><button onClick={() => setCartOpen(false)} aria-label="بستن"><X /></button></div>
           {cartLines.length === 0 ? <div className="cart-empty"><ShoppingBag size={30} /><p>سبد خالی است.</p><button onClick={() => setCartOpen(false)}>ادامه گشتن</button></div>
           : <>
