@@ -7,12 +7,30 @@ on:
 jobs:
   web:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
       - run: cd apps/web && npm install && npm run build
+      - name: Commit generated lockfile to bootstrap branch
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'chore/npm-lockfile-ci-artifact'
+        env:
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin "$HEAD_REF"
+          git checkout -B "$HEAD_REF" FETCH_HEAD
+          git add apps/web/package-lock.json
+          if git diff --cached --quiet; then
+            echo "Lockfile already committed"
+            exit 0
+          fi
+          git commit -m "chore(web): add npm lockfile"
+          git push origin "HEAD:$HEAD_REF"
       - name: Upload generated npm lockfile (temporary bootstrap)
         uses: actions/upload-artifact@v4
         with:
