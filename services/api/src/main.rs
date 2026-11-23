@@ -225,7 +225,10 @@ async fn readiness(State(state): State<AppState>) -> Result<Json<HealthResponse>
 }
 
 fn valid_contact_phone(phone: &str) -> bool {
-    let digits = phone.chars().filter(|character| character.is_ascii_digit()).count();
+    let digits = phone
+        .chars()
+        .filter(|character| character.is_ascii_digit())
+        .count();
     (8..=15).contains(&digits)
         && phone.chars().all(|character| {
             character.is_ascii_digit() || matches!(character, '+' | ' ' | '-' | '(' | ')')
@@ -256,7 +259,9 @@ async fn submit_restaurant_application(
         || !contact_email.contains('@')
         || contact_email.split('@').count() != 2
     {
-        return Err(ApiError::BadRequest("restaurant application fields are invalid"));
+        return Err(ApiError::BadRequest(
+            "restaurant application fields are invalid",
+        ));
     }
 
     let owner_username = auth::normalize_username(&payload.owner_username)
@@ -364,7 +369,20 @@ async fn list_pending_restaurant_applications(
 
     let rows = sqlx::query_as::<
         _,
-        (i64, i64, String, String, String, String, String, String, String, String, String, String),
+        (
+            i64,
+            i64,
+            String,
+            String,
+            String,
+            String,
+            String,
+            String,
+            String,
+            String,
+            String,
+            String,
+        ),
     >(
         "SELECT a.id, r.id, r.name, u.username, a.contact_name, r.contact_phone,
                 r.contact_email, r.city, r.address, r.cuisine, r.description,
@@ -426,7 +444,9 @@ async fn review_restaurant_application(
         return Err(ApiError::Forbidden);
     }
     if application_id <= 0 || !matches!(payload.decision.as_str(), "approve" | "reject") {
-        return Err(ApiError::BadRequest("application id or decision is invalid"));
+        return Err(ApiError::BadRequest(
+            "application id or decision is invalid",
+        ));
     }
     let note = payload.note.unwrap_or_default().trim().to_owned();
     if note.chars().count() > 1000 {
@@ -536,14 +556,16 @@ async fn list_restaurants(
 
     Ok(Json(
         rows.into_iter()
-            .map(|(id, slug, name, city, cuisine, description)| RestaurantSummary {
-                id,
-                slug,
-                name,
-                city,
-                cuisine,
-                description,
-            })
+            .map(
+                |(id, slug, name, city, cuisine, description)| RestaurantSummary {
+                    id,
+                    slug,
+                    name,
+                    city,
+                    cuisine,
+                    description,
+                },
+            )
             .collect(),
     ))
 }
@@ -1226,7 +1248,10 @@ async fn main() {
         .route("/health", get(health))
         .route("/ready", get(readiness))
         .route("/api/restaurants", get(list_restaurants))
-        .route("/api/restaurants/apply", post(submit_restaurant_application))
+        .route(
+            "/api/restaurants/apply",
+            post(submit_restaurant_application),
+        )
         .route(
             "/api/admin/restaurants/applications",
             get(list_pending_restaurant_applications),
@@ -1341,11 +1366,15 @@ mod tests {
                 .fetch_one(&db)
                 .await
                 .expect("owner account should be created");
-        assert!(!pending_owner_active, "owner login must remain disabled until review");
+        assert!(
+            !pending_owner_active,
+            "owner login must remain disabled until review"
+        );
 
-        let pending = list_pending_restaurant_applications(State(state.clone()), owner_headers.clone())
-            .await
-            .expect("platform owner may list pending applications");
+        let pending =
+            list_pending_restaurant_applications(State(state.clone()), owner_headers.clone())
+                .await
+                .expect("platform owner may list pending applications");
         assert_eq!(pending.0.len(), 1);
         assert_eq!(pending.0[0].restaurant_name, "North Kitchen");
         assert_eq!(pending.0[0].owner_username, "north_owner");
@@ -1383,12 +1412,8 @@ mod tests {
         .expect("owner membership should exist");
         assert_eq!(membership, ("restaurant_owner".to_owned(), true));
 
-        let owner_session = staff_session_headers(
-            &state,
-            "north_owner",
-            "north-owner-password-strong",
-        )
-        .await;
+        let owner_session =
+            staff_session_headers(&state, "north_owner", "north-owner-password-strong").await;
         let tenant_item_id: i64 = sqlx::query_scalar(
             "INSERT INTO menu_items (restaurant_id, name, price_minor, available)
              VALUES ($1, 'North Kitchen Dish', 42000, TRUE)
