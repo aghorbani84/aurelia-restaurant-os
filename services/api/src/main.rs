@@ -1561,6 +1561,17 @@ mod tests {
         .expect("tenant-filtered menu query should work");
         assert_eq!(filtered_items.0.len(), 1);
         assert_eq!(filtered_items.0[0].restaurant_id, second_restaurant_id);
+        let active_restaurants = list_restaurants(State(AppState {
+            db: db.clone(),
+            cookie_secure: false,
+            csrf_allowed_origins: vec![],
+        }))
+        .await
+        .expect("active restaurant directory should work");
+        assert!(active_restaurants
+            .0
+            .iter()
+            .any(|restaurant| restaurant.id == second_restaurant_id));
 
         let unavailable_item_id: i64 = sqlx::query_scalar(
             "INSERT INTO menu_items (name, price_minor, available)
@@ -1894,6 +1905,11 @@ mod tests {
     fn order_status_transition_roles_are_restricted() {
         assert!(role_can_update_order_status(
             "owner",
+            "preparing",
+            "cancelled"
+        ));
+        assert!(role_can_update_order_status(
+            "restaurant_owner",
             "preparing",
             "cancelled"
         ));
