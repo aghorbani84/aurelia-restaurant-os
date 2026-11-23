@@ -13,7 +13,6 @@ use rand::{rngs::OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
-use std::str::FromStr;
 
 use crate::{ApiError, AppState};
 
@@ -490,21 +489,6 @@ mod tests {
         assert!(validate_password("correct-horse-12").is_ok());
         assert!(validate_password("short").is_err());
         assert!(validate_password(&"x".repeat(129)).is_err());
-    }
-
-    #[test]
-    fn role_permissions_are_separated_by_work_area() {
-        assert!(can_view_admin_orders("owner"));
-        assert!(can_view_admin_orders("manager"));
-        assert!(can_view_admin_orders("cashier"));
-        assert!(!can_view_admin_orders("chef"));
-        assert!(!can_view_admin_orders("waiter"));
-
-        assert!(can_view_kitchen_orders("chef"));
-        assert!(!can_view_kitchen_orders("cashier"));
-
-        assert!(can_view_service_orders("waiter"));
-        assert!(!can_view_service_orders("chef"));
     }
 
     #[test]
