@@ -1484,7 +1484,6 @@ mod tests {
         );
     }
 
-
     #[test]
     fn order_status_transition_roles_are_restricted() {
         assert!(role_can_update_order_status(
@@ -1529,6 +1528,5 @@ mod tests {
         assert!(!valid_order_transition("completed", "preparing"));
         assert!(!valid_order_transition("pending", "pending"));
     }
-
 
 }
