@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useState } from 'react';
-import { ArrowLeft, ChefHat, ClipboardList, History, LoaderCircle, LogOut, RefreshCw, ShieldCheck, UserRound } from 'lucide-react';
+import { ArrowLeft, ChefHat, ClipboardList, History, LoaderCircle, LogOut, RefreshCw, ShieldCheck, Store, UserRound } from 'lucide-react';
 
 type StaffRole = 'owner' | 'manager' | 'cashier' | 'chef' | 'waiter';
 type AuditRole = StaffRole | 'restaurant_owner';
@@ -418,7 +418,52 @@ export default function StaffPortal() {
             )}
             <p className="staff-readonly-note">این پنل در این مرحله فقط سفارش‌ها را نمایش می‌دهد؛ تغییر وضعیت، مدیریت کارکنان و عملیات مالی هنوز فعال نیست.</p>
             {identity.role === 'owner' && (
-              <section className="staff-audit-section" aria-labelledby="staff-audit-title">
+              <>
+                <section className="staff-applications-section" aria-labelledby="restaurant-applications-title">
+                  <div className="staff-section-title">
+                    <div><Store size={19} /><h2 id="restaurant-applications-title">درخواست‌های ثبت رستوران</h2></div>
+                    <button className="staff-ghost-button" onClick={() => setApplicationsRefreshKey((key) => key + 1)} disabled={applicationsLoading}>
+                      <RefreshCw size={15} /> تازه‌سازی
+                    </button>
+                  </div>
+                  {applicationsError && <p className="staff-feedback staff-error" role="alert">{applicationsError}</p>}
+                  {applicationsLoading && applications.length === 0 ? (
+                    <div className="staff-state"><LoaderCircle className="spin" /> در حال دریافت درخواست‌ها...</div>
+                  ) : applications.length === 0 && !applicationsError ? (
+                    <div className="staff-state"><Store size={22} /> درخواست جدیدی وجود ندارد.</div>
+                  ) : (
+                    <div className="staff-application-list">
+                      {applications.map((application) => (
+                        <article className="staff-application-card" key={application.id}>
+                          <div className="staff-application-head">
+                            <div><span className="staff-application-id">APP / {formatAmount(application.id)}</span><h3>{application.restaurant_name}</h3></div>
+                            <span className="staff-status status-pending">در انتظار بررسی</span>
+                          </div>
+                          <div className="staff-application-details">
+                            <span>مالک: <b>{application.contact_name}</b></span>
+                            <span>نام کاربری: <b>{application.owner_username}</b></span>
+                            <span>تلفن: <b>{application.contact_phone}</b></span>
+                            <span>ایمیل: <b>{application.contact_email}</b></span>
+                            <span>شهر: <b>{application.city}</b></span>
+                            <span>نوع غذا: <b>{application.cuisine}</b></span>
+                            <span className="application-address">آدرس: <b>{application.address}</b></span>
+                          </div>
+                          {application.description && <p className="staff-application-description">{application.description}</p>}
+                          <div className="staff-application-actions">
+                            <button className="application-approve" onClick={() => reviewApplication(application.id, 'approve')} disabled={reviewingApplicationId !== null}>
+                              {reviewingApplicationId === application.id ? <LoaderCircle className="spin" size={15} /> : <ShieldCheck size={15} />}
+                              تأیید و فعال‌سازی
+                            </button>
+                            <button className="application-reject" onClick={() => reviewApplication(application.id, 'reject')} disabled={reviewingApplicationId !== null}>
+                              رد درخواست
+                            </button>
+                          </div>
+                        </article>
+                      ))}
+                    </div>
+                  )}
+                </section>
+                <section className="staff-audit-section" aria-labelledby="staff-audit-title">
                 <div className="staff-section-title">
                   <div><History size={19} /><h2 id="staff-audit-title">سوابق امنیتی</h2></div>
                   <button className="staff-ghost-button" onClick={() => setAuditRefreshKey((key) => key + 1)} disabled={auditLoading}>
@@ -454,7 +499,8 @@ export default function StaffPortal() {
                     {auditLoading ? 'در حال دریافت...' : 'نمایش رویدادهای قدیمی‌تر'}
                   </button>
                 )}
-              </section>
+                </section>
+              </>
             )}
           </section>
         )}
