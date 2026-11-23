@@ -315,9 +315,11 @@ async fn create_order(
     let mut order_lines = Vec::with_capacity(payload.items.len());
 
     for item in &payload.items {
-        let menu_item = sqlx::query_as::<_, (i64, bool, i64)>(
-            "SELECT price_minor, available, restaurant_id
-             FROM menu_items WHERE id = $1 FOR SHARE",
+        let menu_item = sqlx::query_as::<_, (i64, bool, i64, String)>(
+            "SELECT mi.price_minor, mi.available, mi.restaurant_id, r.status
+             FROM menu_items mi
+             INNER JOIN restaurants r ON r.id = mi.restaurant_id
+             WHERE mi.id = $1 FOR SHARE OF mi",
         )
         .bind(item.menu_item_id)
         .fetch_optional(&mut *tx)
@@ -325,7 +327,10 @@ async fn create_order(
         .map_err(|_| ApiError::Internal)?
         .ok_or(ApiError::NotFound("one or more menu items do not exist"))?;
 
-        let (unit_price_minor, available, item_restaurant_id) = menu_item;
+        let (unit_price_minor, available, item_restaurant_id, restaurant_status) = menu_item;
+        if restaurant_status != "active" {
+            return Err(ApiError::Conflict("restaurant is not accepting orders"));
+        }
         if !available {
             return Err(ApiError::Conflict("one or more menu items are unavailable"));
         }
@@ -542,9 +547,10 @@ async fn update_order_status(
 
     sqlx::query(
         "INSERT INTO order_status_events
-            (order_id, actor_staff_user_id, from_status, to_status)
-         VALUES ($1, $2, $3, $4)",
+            (restaurant_id, order_id, actor_staff_user_id, from_status, to_status)
+         VALUES ($1, $2, $3, $4, $5)",
     )
+    .bind(restaurant_id)
     .bind(order_id)
     .bind(staff.id)
     .bind(&current_status)
