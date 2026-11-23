@@ -693,6 +693,377 @@ async fn list_menu_items(
     ))
 }
 
+async fn list_restaurant_menu_categories(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<MenuCategory>>, ApiError> {
+    let (_, restaurant_id, _) = staff_menu_context(&state, &headers, false).await?;
+    let rows = sqlx::query_as::<_, (i64, i64, String, String, String)>(
+        "SELECT mc.id, mc.restaurant_id, r.name, mc.name, mc.slug
+         FROM menu_categories mc
+         INNER JOIN restaurants r ON r.id = mc.restaurant_id
+         WHERE mc.restaurant_id = $1
+         ORDER BY mc.name ASC",
+    )
+    .bind(restaurant_id)
+    .fetch_all(&state.db)
+    .await
+    .map_err(|_| ApiError::Internal)?;
+
+    Ok(Json(
+        rows.into_iter()
+            .map(
+                |(id, restaurant_id, restaurant_name, name, slug)| MenuCategory {
+                    id,
+                    restaurant_id,
+                    restaurant_name,
+                    name,
+                    slug,
+                },
+            )
+            .collect(),
+    ))
+}
+
+async fn create_restaurant_menu_category(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<CreateMenuCategoryRequest>,
+) -> Result<(StatusCode, Json<MenuCategory>), ApiError> {
+    let (staff, restaurant_id, role) = staff_menu_context(&state, &headers, true).await?;
+    let name = payload.name.trim();
+    if !(1..=80).contains(&name.chars().count()) {
+        return Err(ApiError::BadRequest("category name must be 1-80 characters"));
+    }
+
+    let slug = format!("category-{}", Uuid::new_v4().simple());
+    let row: (i64, String, String) = sqlx::query_as(
+        "INSERT INTO menu_categories (restaurant_id, name, slug)
+         VALUES ($1, $2, $3)
+         RETURNING id, name, slug",
+    )
+    .bind(restaurant_id)
+    .bind(name)
+    .bind(slug)
+    .fetch_one(&state.db)
+    .await
+    .map_err(|_| ApiError::Internal)?;
+    let restaurant_name: String =
+        sqlx::query_scalar("SELECT name FROM restaurants WHERE id = $1")
+            .bind(restaurant_id)
+            .fetch_one(&state.db)
+            .await
+            .map_err(|_| ApiError::Internal)?;
+    record_restaurant_audit(
+        &state.db,
+        "restaurant_menu_category_created",
+        staff.id,
+        &role,
+        restaurant_id,
+    )
+    .await?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(MenuCategory {
+            id: row.0,
+            restaurant_id,
+            restaurant_name,
+            name: row.1,
+            slug: row.2,
+        }),
+    ))
+}
+
+async fn delete_restaurant_menu_category(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(category_id): Path<i64>,
+) -> Result<StatusCode, ApiError> {
+    let (staff, restaurant_id, role) = staff_menu_context(&state, &headers, true).await?;
+    if category_id <= 0 {
+        return Err(ApiError::BadRequest("category id must be positive"));
+    }
+    let deleted = sqlx::query(
+        "DELETE FROM menu_categories WHERE id = $1 AND restaurant_id = $2",
+    )
+    .bind(category_id)
+    .bind(restaurant_id)
+    .execute(&state.db)
+    .await
+    .map_err(|_| ApiError::Internal)?;
+    if deleted.rows_affected() == 0 {
+        return Err(ApiError::NotFound("category not found"));
+    }
+    record_restaurant_audit(
+        &state.db,
+        "restaurant_menu_category_deleted",
+        staff.id,
+        &role,
+        restaurant_id,
+    )
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn list_restaurant_menu_items(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<MenuItem>>, ApiError> {
+    let (_, restaurant_id, _) = staff_menu_context(&state, &headers, false).await?;
+    let rows = sqlx::query_as::<
+        _,
+        (
+            i64,
+            i64,
+            String,
+            Option<i64>,
+            Option<String>,
+            String,
+            String,
+            i64,
+            bool,
+        ),
+    >(
+        "SELECT mi.id, mi.restaurant_id, r.name, mi.category_id, mc.name,
+                mi.name, mi.description, mi.price_minor, mi.available
+         FROM menu_items mi
+         INNER JOIN restaurants r ON r.id = mi.restaurant_id
+         LEFT JOIN menu_categories mc
+           ON mc.restaurant_id = mi.restaurant_id AND mc.id = mi.category_id
+         WHERE mi.restaurant_id = $1
+         ORDER BY mi.id ASC",
+    )
+    .bind(restaurant_id)
+    .fetch_all(&state.db)
+    .await
+    .map_err(|_| ApiError::Internal)?;
+
+    Ok(Json(
+        rows.into_iter()
+            .map(
+                |(
+                    id,
+                    restaurant_id,
+                    restaurant_name,
+                    category_id,
+                    category_name,
+                    name,
+                    description,
+                    price_minor,
+                    available,
+                )| MenuItem {
+                    id,
+                    restaurant_id,
+                    restaurant_name,
+                    category_id,
+                    category_name,
+                    name,
+                    description,
+                    price_minor,
+                    available,
+                },
+            )
+            .collect(),
+    ))
+}
+
+fn validate_menu_item_payload(payload: &MenuItemMutationRequest) -> Result<(), ApiError> {
+    let name = payload.name.trim();
+    let description = payload.description.trim();
+    if !(1..=160).contains(&name.chars().count())
+        || description.chars().count() > 1000
+        || !(1..=100_000_000).contains(&payload.price_minor)
+        || payload.category_id.is_some_and(|id| id <= 0)
+    {
+        return Err(ApiError::BadRequest("menu item fields are invalid"));
+    }
+    Ok(())
+}
+
+async fn validate_menu_category(
+    db: &PgPool,
+    restaurant_id: i64,
+    category_id: Option<i64>,
+) -> Result<(), ApiError> {
+    if let Some(category_id) = category_id {
+        let exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM menu_categories WHERE id = $1 AND restaurant_id = $2)",
+        )
+        .bind(category_id)
+        .bind(restaurant_id)
+        .fetch_one(db)
+        .await
+        .map_err(|_| ApiError::Internal)?;
+        if !exists {
+            return Err(ApiError::BadRequest("category does not belong to this restaurant"));
+        }
+    }
+    Ok(())
+}
+
+async fn fetch_menu_item(
+    db: &PgPool,
+    restaurant_id: i64,
+    item_id: i64,
+) -> Result<MenuItem, ApiError> {
+    sqlx::query_as::<_, MenuItem>(
+        "SELECT mi.id, mi.restaurant_id, r.name AS restaurant_name, mi.category_id,
+                mc.name AS category_name, mi.name, mi.description, mi.price_minor, mi.available
+         FROM menu_items mi
+         INNER JOIN restaurants r ON r.id = mi.restaurant_id
+         LEFT JOIN menu_categories mc
+           ON mc.restaurant_id = mi.restaurant_id AND mc.id = mi.category_id
+         WHERE mi.restaurant_id = $1 AND mi.id = $2",
+    )
+    .bind(restaurant_id)
+    .bind(item_id)
+    .fetch_optional(db)
+    .await
+    .map_err(|_| ApiError::Internal)?
+    .ok_or(ApiError::NotFound("menu item not found"))
+}
+
+async fn create_restaurant_menu_item(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<MenuItemMutationRequest>,
+) -> Result<(StatusCode, Json<MenuItem>), ApiError> {
+    let (staff, restaurant_id, role) = staff_menu_context(&state, &headers, true).await?;
+    validate_menu_item_payload(&payload)?;
+    validate_menu_category(&state.db, restaurant_id, payload.category_id).await?;
+
+    let item_id: i64 = sqlx::query_scalar(
+        "INSERT INTO menu_items
+            (restaurant_id, category_id, name, description, price_minor, available)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         RETURNING id",
+    )
+    .bind(restaurant_id)
+    .bind(payload.category_id)
+    .bind(payload.name.trim())
+    .bind(payload.description.trim())
+    .bind(payload.price_minor)
+    .bind(payload.available)
+    .fetch_one(&state.db)
+    .await
+    .map_err(|_| ApiError::Internal)?;
+    record_restaurant_audit(
+        &state.db,
+        "restaurant_menu_item_created",
+        staff.id,
+        &role,
+        restaurant_id,
+    )
+    .await?;
+    let item = fetch_menu_item(&state.db, restaurant_id, item_id).await?;
+    Ok((StatusCode::CREATED, Json(item)))
+}
+
+async fn update_restaurant_menu_item(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(item_id): Path<i64>,
+    Json(payload): Json<MenuItemMutationRequest>,
+) -> Result<Json<MenuItem>, ApiError> {
+    let (staff, restaurant_id, role) = staff_menu_context(&state, &headers, true).await?;
+    if item_id <= 0 {
+        return Err(ApiError::BadRequest("item id must be positive"));
+    }
+    validate_menu_item_payload(&payload)?;
+    validate_menu_category(&state.db, restaurant_id, payload.category_id).await?;
+
+    let updated = sqlx::query(
+        "UPDATE menu_items
+         SET category_id = $1, name = $2, description = $3, price_minor = $4, available = $5
+         WHERE id = $6 AND restaurant_id = $7",
+    )
+    .bind(payload.category_id)
+    .bind(payload.name.trim())
+    .bind(payload.description.trim())
+    .bind(payload.price_minor)
+    .bind(payload.available)
+    .bind(item_id)
+    .bind(restaurant_id)
+    .execute(&state.db)
+    .await
+    .map_err(|_| ApiError::Internal)?;
+    if updated.rows_affected() == 0 {
+        return Err(ApiError::NotFound("menu item not found"));
+    }
+    record_restaurant_audit(
+        &state.db,
+        "restaurant_menu_item_updated",
+        staff.id,
+        &role,
+        restaurant_id,
+    )
+    .await?;
+    Ok(Json(fetch_menu_item(&state.db, restaurant_id, item_id).await?))
+}
+
+async fn delete_restaurant_menu_item(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(item_id): Path<i64>,
+) -> Result<StatusCode, ApiError> {
+    let (staff, restaurant_id, role) = staff_menu_context(&state, &headers, true).await?;
+    if item_id <= 0 {
+        return Err(ApiError::BadRequest("item id must be positive"));
+    }
+    let deleted = sqlx::query("DELETE FROM menu_items WHERE id = $1 AND restaurant_id = $2")
+        .bind(item_id)
+        .bind(restaurant_id)
+        .execute(&state.db)
+        .await
+        .map_err(|_| ApiError::Internal)?;
+    if deleted.rows_affected() == 0 {
+        return Err(ApiError::NotFound("menu item not found"));
+    }
+    record_restaurant_audit(
+        &state.db,
+        "restaurant_menu_item_deleted",
+        staff.id,
+        &role,
+        restaurant_id,
+    )
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn set_restaurant_menu_item_availability(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(item_id): Path<i64>,
+    Json(payload): Json<MenuItemAvailabilityRequest>,
+) -> Result<Json<MenuItem>, ApiError> {
+    let (staff, restaurant_id, role) = staff_menu_context(&state, &headers, true).await?;
+    if item_id <= 0 {
+        return Err(ApiError::BadRequest("item id must be positive"));
+    }
+    let updated = sqlx::query(
+        "UPDATE menu_items SET available = $1 WHERE id = $2 AND restaurant_id = $3",
+    )
+    .bind(payload.available)
+    .bind(item_id)
+    .bind(restaurant_id)
+    .execute(&state.db)
+    .await
+    .map_err(|_| ApiError::Internal)?;
+    if updated.rows_affected() == 0 {
+        return Err(ApiError::NotFound("menu item not found"));
+    }
+    record_restaurant_audit(
+        &state.db,
+        "restaurant_menu_item_updated",
+        staff.id,
+        &role,
+        restaurant_id,
+    )
+    .await?;
+    Ok(Json(fetch_menu_item(&state.db, restaurant_id, item_id).await?))
+}
+
 async fn create_order(
     State(state): State<AppState>,
     Json(payload): Json<CreateOrderRequest>,
