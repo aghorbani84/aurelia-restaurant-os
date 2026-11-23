@@ -147,6 +147,25 @@ struct MenuItem {
 }
 
 #[derive(Deserialize)]
+struct CreateMenuCategoryRequest {
+    name: String,
+}
+
+#[derive(Deserialize)]
+struct MenuItemMutationRequest {
+    name: String,
+    description: String,
+    category_id: Option<i64>,
+    price_minor: i64,
+    available: bool,
+}
+
+#[derive(Deserialize)]
+struct MenuItemAvailabilityRequest {
+    available: bool,
+}
+
+#[derive(Deserialize)]
 struct CreateOrderRequest {
     customer_name: String,
     items: Vec<OrderItemInput>,
@@ -975,6 +994,71 @@ async fn first_staff_restaurant_id(db: &PgPool, staff_user_id: i64) -> Result<i6
     .await
     .map_err(|_| ApiError::Internal)?
     .ok_or(ApiError::Forbidden)
+}
+
+async fn default_restaurant_id(db: &PgPool) -> Result<i64, ApiError> {
+    sqlx::query_scalar("SELECT id FROM restaurants WHERE is_default = TRUE")
+        .fetch_optional(db)
+        .await
+        .map_err(|_| ApiError::Internal)?
+        .ok_or(ApiError::Internal)
+}
+
+async fn staff_menu_context(
+    state: &AppState,
+    headers: &HeaderMap,
+    mutation: bool,
+) -> Result<(auth::StaffIdentity, i64, String), ApiError> {
+    let staff = auth::current_staff(state, headers).await?;
+    if mutation {
+        auth::validate_request_origin(state, headers)?;
+    }
+
+    let (restaurant_id, role) = if staff.role == "owner" {
+        (default_restaurant_id(&state.db).await?, "owner".to_owned())
+    } else {
+        let restaurant_id = first_staff_restaurant_id(&state.db, staff.id).await?;
+        let role = restaurant_staff_role(&state.db, staff.id, restaurant_id)
+            .await?
+            .ok_or(ApiError::Forbidden)?;
+        if !matches!(role.as_str(), "restaurant_owner" | "manager") {
+            return Err(ApiError::Forbidden);
+        }
+        (restaurant_id, role)
+    };
+
+    let status: String = sqlx::query_scalar("SELECT status FROM restaurants WHERE id = $1")
+        .bind(restaurant_id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|_| ApiError::Internal)?
+        .ok_or(ApiError::NotFound("restaurant not found"))?;
+    if status != "active" && staff.role != "owner" {
+        return Err(ApiError::Forbidden);
+    }
+    Ok((staff, restaurant_id, role))
+}
+
+async fn record_restaurant_audit(
+    db: &PgPool,
+    event_type: &str,
+    actor_staff_user_id: i64,
+    subject_role: &str,
+    restaurant_id: i64,
+) -> Result<(), ApiError> {
+    sqlx::query(
+        "INSERT INTO staff_audit_log
+            (event_type, actor_staff_user_id, subject_role, restaurant_id)
+         VALUES ($1, $2, $3, $4)",
+    )
+    .bind(event_type)
+    .bind(actor_staff_user_id)
+    .bind(subject_role)
+    .bind(restaurant_id)
+    .execute(db)
+    .await
+    .map_err(|_| ApiError::Internal)?;
+    Ok(())
 }
 
 async fn restaurant_staff_role(
