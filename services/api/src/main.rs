@@ -1157,7 +1157,6 @@ mod tests {
         ));
     }
 
-    #[tokio::test]
     async fn staff_session_headers(
         state: &AppState,
         username: &str,
@@ -1190,6 +1189,7 @@ mod tests {
         headers
     }
 
+    #[tokio::test]
     async fn order_creation_uses_database_prices_and_rejects_invalid_orders() {
         let _guard = TEST_DB_LOCK.lock().await;
         let db = test_database().await;
