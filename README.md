@@ -9,7 +9,7 @@
 
 > **Project status:** early development. PostgreSQL-backed menu and order APIs, staff login sessions, role-scoped read-only order endpoints, and a basic staff workspace exist. Staff account management, a full kitchen display, inventory, reservations, accounting, payments, production deployment hardening, and full end-to-end browser tests are not implemented. The API supports role-scoped order status transitions and records them in PostgreSQL; the staff workspace still has no status controls.
 
-> **Marketplace status:** tenant schema, restaurant discovery, tenant-filtered menus, single-restaurant cart validation, and tenant-scoped staff order access are implemented. A Persian-first customer marketplace UI is merged. Restaurant applications with inactive owner accounts, manual admin approval/rejection, and stricter gateway rate limiting are in development/PR review. Menu management, owner dashboard, customer accounts/address, payment, logistics, and production readiness remain incomplete; do not treat this as a production marketplace.
+> **Marketplace status:** tenant schema, discovery, customer UI, single-restaurant cart validation, restaurant applications, manual approval/rejection, disabled pending owner accounts, gateway rate limiting, and tenant-scoped staff order access are merged. Tenant-scoped menu category/item CRUD is now in development/PR review. Owner dashboard analytics, customer accounts/address, payments, logistics, and production readiness remain incomplete; do not treat this as a production marketplace.
 
 ## Run locally
 
