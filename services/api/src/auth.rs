@@ -32,7 +32,10 @@ fn origin_is_allowed(origin: Option<&str>, configured: &[String]) -> bool {
         .any(|candidate| candidate != "*" && candidate != "null" && candidate == origin)
 }
 
-fn validate_request_origin(state: &AppState, headers: &HeaderMap) -> Result<(), ApiError> {
+pub(crate) fn validate_request_origin(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<(), ApiError> {
     let origin = headers
         .get(header::ORIGIN)
         .and_then(|value| value.to_str().ok());

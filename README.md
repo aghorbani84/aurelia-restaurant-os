@@ -7,7 +7,7 @@
 - **Database:** PostgreSQL 16
 - **Gateway:** OpenResty / LuaJIT
 
-> **Project status:** early development. PostgreSQL-backed menu and order APIs, staff login sessions, role-scoped read-only order endpoints, and a basic staff workspace exist. Staff account management, order mutations, full kitchen display, inventory, reservations, accounting, payments, production deployment hardening, and full end-to-end browser tests are not implemented.
+> **Project status:** early development. PostgreSQL-backed menu and order APIs, staff login sessions, role-scoped read-only order endpoints, and a basic staff workspace exist. Staff account management, a full kitchen display, inventory, reservations, accounting, payments, production deployment hardening, and full end-to-end browser tests are not implemented. The API supports role-scoped order status transitions and records them in PostgreSQL; the staff workspace still has no status controls.
 
 ## Run locally
 
@@ -20,7 +20,7 @@ export POSTGRES_PASSWORD='change-this-local-dev-password'
 export CORS_ALLOWED_ORIGINS='https://app.example.com,https://admin.example.com'
 # Secure cookies are enabled by default. Disable only for local plain-HTTP testing.
 export COOKIE_SECURE=true
-# Exact browser origins allowed to submit staff login/logout requests.
+# Exact browser origins allowed to submit staff login/logout and order status mutation requests.
 export CSRF_ALLOWED_ORIGINS='http://localhost:5173,http://localhost:8088'
 docker compose up --build
 ```
@@ -77,6 +77,9 @@ Allowed roles for this command are `manager`, `cashier`, `chef`, and `waiter`. A
 
 ## API
 
+Order status transitions are limited to pending → accepted → preparing → ready → completed; cancellation is allowed only from pending, accepted, or preparing. Owners/managers may perform all valid transitions, chefs control kitchen stages, waiters complete ready orders or cancel pending ones, and cashiers may cancel pending/accepted orders. Every successful change is recorded in `order_status_events` within the same transaction. The current staff UI remains read-only.
+
+
 The Rust API listens on port `8080` inside the Docker network. The OpenResty gateway listens on `8088` and proxies `/api/` to the API.
 
 | Method | Path | Access |
@@ -86,6 +89,7 @@ The Rust API listens on port `8080` inside the Docker network. The OpenResty gat
 | GET | `/api/menu/categories` | Public menu |
 | GET | `/api/menu/items` | Public menu |
 | POST | `/api/orders` | Public customer order request |
+| POST | `/api/orders/:order_id/status` | Staff session; role-scoped transition and CSRF Origin validation |
 | POST | `/api/auth/login` | Staff login |
 | POST | `/api/auth/logout` | Current staff session |
 | GET | `/api/auth/me` | Current staff session |

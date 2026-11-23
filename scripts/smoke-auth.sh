@@ -71,6 +71,7 @@ curl -fsS \
   -d "{\"customer_name\":\"Smoke Test\",\"items\":[{\"menu_item_id\":$item_id,\"quantity\":2}]}" \
   http://localhost:8088/api/orders > "$tmp_dir/order.json"
 grep -q '"total_minor":2500' "$tmp_dir/order.json"
+order_id="$(jq -r .id "$tmp_dir/order.json")"
 
 curl -fsS -b "$tmp_dir/owner.cookies" \
   http://localhost:8088/api/admin/orders > "$tmp_dir/admin-orders.json"
@@ -96,6 +97,52 @@ curl -fsS \
 curl -fsS -b "$tmp_dir/chef.cookies" \
   http://localhost:8088/api/kitchen/orders > "$tmp_dir/kitchen-orders.json"
 grep -q '"customer_name":"Smoke Test"' "$tmp_dir/kitchen-orders.json"
+
+for next_status in accepted preparing ready; do
+  curl -fsS \
+    -b "$tmp_dir/chef.cookies" \
+    -H "Content-Type: application/json" \
+    -H "Origin: http://localhost:8088" \
+    -d "{\"status\":\"$next_status\"}" \
+    "http://localhost:8088/api/orders/$order_id/status" > "$tmp_dir/status-$next_status.json"
+  grep -q "\"status\":\"$next_status\"" "$tmp_dir/status-$next_status.json"
+done
+
+export AURELIA_STAFF_USERNAME=waiter
+export AURELIA_STAFF_PASSWORD="aurelia-waiter-password-123"
+export AURELIA_STAFF_ROLE=waiter
+docker compose exec -T \
+  -e "AURELIA_STAFF_USERNAME=$AURELIA_STAFF_USERNAME" \
+  -e "AURELIA_STAFF_PASSWORD=$AURELIA_STAFF_PASSWORD" \
+  -e "AURELIA_STAFF_ROLE=$AURELIA_STAFF_ROLE" \
+  api aurelia-api create-staff
+unset AURELIA_STAFF_USERNAME AURELIA_STAFF_PASSWORD AURELIA_STAFF_ROLE
+
+curl -fsS \
+  -c "$tmp_dir/waiter.cookies" \
+  -H "Content-Type: application/json" \
+  -H "Origin: http://localhost:8088" \
+  -d '{"username":"waiter","password":"aurelia-waiter-password-123"}' \
+  http://localhost:8088/api/auth/login > "$tmp_dir/waiter-login.json"
+
+curl -fsS \
+  -b "$tmp_dir/waiter.cookies" \
+  -H "Content-Type: application/json" \
+  -H "Origin: http://localhost:8088" \
+  -d '{"status":"completed"}' \
+  "http://localhost:8088/api/orders/$order_id/status" > "$tmp_dir/status-completed.json"
+grep -q '"status":"completed"' "$tmp_dir/status-completed.json"
+
+invalid_transition_status="$(curl -sS -o "$tmp_dir/invalid-transition.json" -w '%{http_code}' \
+  -b "$tmp_dir/owner.cookies" \
+  -H "Content-Type: application/json" \
+  -H "Origin: http://localhost:8088" \
+  -d '{"status":"preparing"}' \
+  "http://localhost:8088/api/orders/$order_id/status")"
+if [ "$invalid_transition_status" != "409" ]; then
+  echo "Completed order must not move back to preparing; received HTTP $invalid_transition_status" >&2
+  exit 1
+fi
 
 admin_status="$(curl -sS -o "$tmp_dir/chef-admin.json" -w '%{http_code}' \
   -b "$tmp_dir/chef.cookies" http://localhost:8088/api/admin/orders)"
