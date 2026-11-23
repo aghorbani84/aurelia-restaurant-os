@@ -16,9 +16,9 @@ jobs:
           node-version: 22
       - run: cd apps/web && npm install && npm run build
       - name: Commit generated lockfile to bootstrap branch
-        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'chore/npm-lockfile-ci-artifact'
+        if: github.event_name == 'push' && github.ref == 'refs/heads/chore/npm-lockfile-ci-artifact'
         env:
-          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          HEAD_REF: chore/npm-lockfile-ci-artifact
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -27,6 +27,21 @@ jobs:
           git add apps/web/package-lock.json
           if git diff --cached --quiet; then
             echo "Lockfile already committed"
+            exit 0
+          fi
+          git commit -m "chore(web): add npm lockfile"
+          if git push origin "HEAD:$HEAD_REF"; then
+            exit 0
+          fi
+          git fetch origin "$HEAD_REF"
+          git checkout -B "$HEAD_REF" FETCH_HEAD
+          if git ls-tree -r HEAD --name-only | grep -qx 'apps/web/package-lock.json'; then
+            echo "A concurrent run committed the lockfile"
+            exit 0
+          fi
+          git add apps/web/package-lock.json
+          if git diff --cached --quiet; then
+            echo "Lockfile unchanged after refresh"
             exit 0
           fi
           git commit -m "chore(web): add npm lockfile"
