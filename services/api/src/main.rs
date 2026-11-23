@@ -225,7 +225,7 @@ async fn readiness(State(state): State<AppState>) -> Result<Json<HealthResponse>
 }
 
 fn valid_contact_phone(phone: &str) -> bool {
-    let digits = phone.chars().filter(char::is_ascii_digit).count();
+    let digits = phone.chars().filter(|character| character.is_ascii_digit()).count();
     (8..=15).contains(&digits)
         && phone.chars().all(|character| {
             character.is_ascii_digit() || matches!(character, '+' | ' ' | '-' | '(' | ')')
