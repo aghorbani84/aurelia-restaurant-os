@@ -60,8 +60,22 @@ impl IntoResponse for ApiError {
 }
 
 #[derive(Serialize)]
+struct RestaurantSummary {
+    id: i64,
+    slug: String,
+    name: String,
+}
+
+#[derive(Deserialize)]
+struct RestaurantFilter {
+    restaurant_id: Option<i64>,
+}
+
+#[derive(Serialize)]
 struct MenuCategory {
     id: i64,
+    restaurant_id: i64,
+    restaurant_name: String,
     name: String,
     slug: String,
 }
@@ -69,6 +83,8 @@ struct MenuCategory {
 #[derive(Serialize)]
 struct MenuItem {
     id: i64,
+    restaurant_id: i64,
+    restaurant_name: String,
     category_id: Option<i64>,
     category_name: Option<String>,
     name: String,
@@ -155,11 +171,15 @@ async fn readiness(State(state): State<AppState>) -> Result<Json<HealthResponse>
     Ok(Json(HealthResponse { status: "ready" }))
 }
 
-async fn list_categories(
+async fn list_restaurants(
     State(state): State<AppState>,
-) -> Result<Json<Vec<MenuCategory>>, ApiError> {
+) -> Result<Json<Vec<RestaurantSummary>>, ApiError> {
     let rows = sqlx::query_as::<_, (i64, String, String)>(
-        "SELECT id, name, slug FROM menu_categories ORDER BY name ASC LIMIT 200",
+        "SELECT id, slug, name
+         FROM restaurants
+         WHERE status = 'active'
+         ORDER BY name ASC
+         LIMIT 200",
     )
     .fetch_all(&state.db)
     .await
@@ -167,19 +187,70 @@ async fn list_categories(
 
     Ok(Json(
         rows.into_iter()
-            .map(|(id, name, slug)| MenuCategory { id, name, slug })
+            .map(|(id, slug, name)| RestaurantSummary { id, slug, name })
             .collect(),
     ))
 }
 
-async fn list_menu_items(State(state): State<AppState>) -> Result<Json<Vec<MenuItem>>, ApiError> {
-    let rows = sqlx::query_as::<_, (i64, Option<i64>, Option<String>, String, String, i64, bool)>(
-        "SELECT mi.id, mi.category_id, mc.name, mi.name, mi.description, mi.price_minor, mi.available
-         FROM menu_items mi
-         LEFT JOIN menu_categories mc ON mc.id = mi.category_id
-         ORDER BY mi.name ASC
+async fn list_categories(
+    State(state): State<AppState>,
+    Query(filter): Query<RestaurantFilter>,
+) -> Result<Json<Vec<MenuCategory>>, ApiError> {
+    if filter.restaurant_id.is_some_and(|id| id <= 0) {
+        return Err(ApiError::BadRequest("restaurant_id must be positive"));
+    }
+
+    let rows = sqlx::query_as::<_, (i64, i64, String, String, String)>(
+        "SELECT mc.id, mc.restaurant_id, r.name, mc.name, mc.slug
+         FROM menu_categories mc
+         INNER JOIN restaurants r ON r.id = mc.restaurant_id
+         WHERE r.status = 'active'
+           AND ($1::bigint IS NULL OR mc.restaurant_id = $1)
+         ORDER BY r.name ASC, mc.name ASC
          LIMIT 500",
     )
+    .bind(filter.restaurant_id)
+    .fetch_all(&state.db)
+    .await
+    .map_err(|_| ApiError::Internal)?;
+
+    Ok(Json(
+        rows.into_iter()
+            .map(|(id, restaurant_id, restaurant_name, name, slug)| MenuCategory {
+                id,
+                restaurant_id,
+                restaurant_name,
+                name,
+                slug,
+            })
+            .collect(),
+    ))
+}
+
+async fn list_menu_items(
+    State(state): State<AppState>,
+    Query(filter): Query<RestaurantFilter>,
+) -> Result<Json<Vec<MenuItem>>, ApiError> {
+    if filter.restaurant_id.is_some_and(|id| id <= 0) {
+        return Err(ApiError::BadRequest("restaurant_id must be positive"));
+    }
+
+    let rows = sqlx::query_as::<
+        _,
+        (i64, i64, String, Option<i64>, Option<String>, String, String, i64, bool),
+    >(
+        "SELECT mi.id, mi.restaurant_id, r.name, mi.category_id, mc.name,
+                mi.name, mi.description, mi.price_minor, mi.available
+         FROM menu_items mi
+         INNER JOIN restaurants r ON r.id = mi.restaurant_id
+         LEFT JOIN menu_categories mc
+           ON mc.restaurant_id = mi.restaurant_id AND mc.id = mi.category_id
+         WHERE r.status = 'active'
+           AND ($1::bigint IS NULL OR mi.restaurant_id = $1)
+         ORDER BY r.name ASC, mi.name ASC
+         LIMIT 1000",
+    )
+    .bind(filter.restaurant_id)
     .fetch_all(&state.db)
     .await
     .map_err(|_| ApiError::Internal)?;
@@ -187,16 +258,26 @@ async fn list_menu_items(State(state): State<AppState>) -> Result<Json<Vec<MenuI
     Ok(Json(
         rows.into_iter()
             .map(
-                |(id, category_id, category_name, name, description, price_minor, available)| {
-                    MenuItem {
-                        id,
-                        category_id,
-                        category_name,
-                        name,
-                        description,
-                        price_minor,
-                        available,
-                    }
+                |(
+                    id,
+                    restaurant_id,
+                    restaurant_name,
+                    category_id,
+                    category_name,
+                    name,
+                    description,
+                    price_minor,
+                    available,
+                )| MenuItem {
+                    id,
+                    restaurant_id,
+                    restaurant_name,
+                    category_id,
+                    category_name,
+                    name,
+                    description,
+                    price_minor,
+                    available,
                 },
             )
             .collect(),
@@ -230,11 +311,13 @@ async fn create_order(
 
     let mut tx = state.db.begin().await.map_err(|_| ApiError::Internal)?;
     let mut total_minor: i64 = 0;
+    let mut restaurant_id: Option<i64> = None;
     let mut order_lines = Vec::with_capacity(payload.items.len());
 
     for item in &payload.items {
-        let menu_item = sqlx::query_as::<_, (i64, bool)>(
-            "SELECT price_minor, available FROM menu_items WHERE id = $1 FOR SHARE",
+        let menu_item = sqlx::query_as::<_, (i64, bool, i64)>(
+            "SELECT price_minor, available, restaurant_id
+             FROM menu_items WHERE id = $1 FOR SHARE",
         )
         .bind(item.menu_item_id)
         .fetch_optional(&mut *tx)
@@ -242,10 +325,16 @@ async fn create_order(
         .map_err(|_| ApiError::Internal)?
         .ok_or(ApiError::NotFound("one or more menu items do not exist"))?;
 
-        let (unit_price_minor, available) = menu_item;
+        let (unit_price_minor, available, item_restaurant_id) = menu_item;
         if !available {
             return Err(ApiError::Conflict("one or more menu items are unavailable"));
         }
+        if restaurant_id.is_some_and(|id| id != item_restaurant_id) {
+            return Err(ApiError::BadRequest(
+                "orders may contain items from one restaurant only",
+            ));
+        }
+        restaurant_id = Some(item_restaurant_id);
 
         let line_total = unit_price_minor
             .checked_mul(i64::from(item.quantity))
@@ -253,15 +342,22 @@ async fn create_order(
         total_minor = total_minor
             .checked_add(line_total)
             .ok_or(ApiError::BadRequest("order total is out of range"))?;
-        order_lines.push((item.menu_item_id, item.quantity, unit_price_minor));
+        order_lines.push((
+            item_restaurant_id,
+            item.menu_item_id,
+            item.quantity,
+            unit_price_minor,
+        ));
     }
 
+    let restaurant_id = restaurant_id.ok_or(ApiError::BadRequest("items are required"))?;
     let order_number = format!("AUR-{}", Uuid::new_v4().simple());
     let (order_id, status) = sqlx::query_as::<_, (i64, String)>(
-        "INSERT INTO orders (order_number, customer_name, status, total_minor)
-         VALUES ($1, $2, 'pending', $3)
+        "INSERT INTO orders (restaurant_id, order_number, customer_name, status, total_minor)
+         VALUES ($1, $2, $3, 'pending', $4)
          RETURNING id, status",
     )
+    .bind(restaurant_id)
     .bind(&order_number)
     .bind(customer_name)
     .bind(total_minor)
@@ -269,11 +365,13 @@ async fn create_order(
     .await
     .map_err(|_| ApiError::Internal)?;
 
-    for (menu_item_id, quantity, unit_price_minor) in order_lines {
+    for (line_restaurant_id, menu_item_id, quantity, unit_price_minor) in order_lines {
         sqlx::query(
-            "INSERT INTO order_lines (order_id, menu_item_id, quantity, unit_price_minor)
-             VALUES ($1, $2, $3, $4)",
+            "INSERT INTO order_lines
+                (restaurant_id, order_id, menu_item_id, quantity, unit_price_minor)
+             VALUES ($1, $2, $3, $4, $5)",
         )
+        .bind(line_restaurant_id)
         .bind(order_id)
         .bind(menu_item_id)
         .bind(quantity)
@@ -296,15 +394,21 @@ async fn create_order(
     ))
 }
 
-async fn fetch_orders(db: &PgPool, active_only: bool) -> Result<Response, ApiError> {
+async fn fetch_orders(
+    db: &PgPool,
+    active_only: bool,
+    restaurant_id: Option<i64>,
+) -> Result<Response, ApiError> {
     let rows = if active_only {
         sqlx::query_as::<_, (i64, String, String, String, i64)>(
             "SELECT id, order_number, customer_name, status, total_minor
              FROM orders
-             WHERE status IN ('pending', 'accepted', 'preparing', 'ready')
+             WHERE ($1::bigint IS NULL OR restaurant_id = $1)
+               AND status IN ('pending', 'accepted', 'preparing', 'ready')
              ORDER BY created_at ASC
              LIMIT 200",
         )
+        .bind(restaurant_id)
         .fetch_all(db)
         .await
         .map_err(|_| ApiError::Internal)?
@@ -312,9 +416,11 @@ async fn fetch_orders(db: &PgPool, active_only: bool) -> Result<Response, ApiErr
         sqlx::query_as::<_, (i64, String, String, String, i64)>(
             "SELECT id, order_number, customer_name, status, total_minor
              FROM orders
+             WHERE ($1::bigint IS NULL OR restaurant_id = $1)
              ORDER BY created_at DESC
              LIMIT 200",
         )
+        .bind(restaurant_id)
         .fetch_all(db)
         .await
         .map_err(|_| ApiError::Internal)?
