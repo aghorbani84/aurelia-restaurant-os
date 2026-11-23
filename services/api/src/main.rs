@@ -361,9 +361,7 @@ fn role_can_update_order_status(role: &str, from: &str, to: &str) -> bool {
     match role {
         "chef" => matches!(
             (from, to),
-            ("pending", "accepted")
-                | ("accepted", "preparing")
-                | ("preparing", "ready")
+            ("pending", "accepted") | ("accepted", "preparing") | ("preparing", "ready")
         ),
         "waiter" => matches!(
             (from, to),
@@ -1157,11 +1155,7 @@ mod tests {
         ));
     }
 
-    async fn staff_session_headers(
-        state: &AppState,
-        username: &str,
-        password: &str,
-    ) -> HeaderMap {
+    async fn staff_session_headers(state: &AppState, username: &str, password: &str) -> HeaderMap {
         let response = auth::login(
             State(state.clone()),
             test_origin_headers(),
@@ -1473,10 +1467,18 @@ mod tests {
             events,
             vec![
                 (first_order.id, "pending".to_owned(), "accepted".to_owned()),
-                (first_order.id, "accepted".to_owned(), "preparing".to_owned()),
+                (
+                    first_order.id,
+                    "accepted".to_owned(),
+                    "preparing".to_owned()
+                ),
                 (first_order.id, "preparing".to_owned(), "ready".to_owned()),
                 (first_order.id, "ready".to_owned(), "completed".to_owned()),
-                (second_order.id, "pending".to_owned(), "cancelled".to_owned()),
+                (
+                    second_order.id,
+                    "pending".to_owned(),
+                    "cancelled".to_owned()
+                ),
             ],
             "only valid transitions should be recorded",
         );
@@ -1485,17 +1487,45 @@ mod tests {
 
     #[test]
     fn order_status_transition_roles_are_restricted() {
-        assert!(role_can_update_order_status("owner", "preparing", "cancelled"));
-        assert!(role_can_update_order_status("manager", "ready", "completed"));
+        assert!(role_can_update_order_status(
+            "owner",
+            "preparing",
+            "cancelled"
+        ));
+        assert!(role_can_update_order_status(
+            "manager",
+            "ready",
+            "completed"
+        ));
         assert!(role_can_update_order_status("chef", "pending", "accepted"));
-        assert!(role_can_update_order_status("chef", "accepted", "preparing"));
+        assert!(role_can_update_order_status(
+            "chef",
+            "accepted",
+            "preparing"
+        ));
         assert!(role_can_update_order_status("chef", "preparing", "ready"));
         assert!(role_can_update_order_status("waiter", "ready", "completed"));
-        assert!(role_can_update_order_status("cashier", "accepted", "cancelled"));
+        assert!(role_can_update_order_status(
+            "cashier",
+            "accepted",
+            "cancelled"
+        ));
 
-        assert!(!role_can_update_order_status("chef", "pending", "cancelled"));
-        assert!(!role_can_update_order_status("cashier", "ready", "completed"));
-        assert!(!role_can_update_order_status("waiter", "preparing", "ready"));
+        assert!(!role_can_update_order_status(
+            "chef",
+            "pending",
+            "cancelled"
+        ));
+        assert!(!role_can_update_order_status(
+            "cashier",
+            "ready",
+            "completed"
+        ));
+        assert!(!role_can_update_order_status(
+            "waiter",
+            "preparing",
+            "ready"
+        ));
         assert!(!valid_order_transition("completed", "preparing"));
         assert!(!valid_order_transition("pending", "pending"));
     }
