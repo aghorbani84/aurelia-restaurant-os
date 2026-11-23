@@ -60,8 +60,22 @@ impl IntoResponse for ApiError {
 }
 
 #[derive(Serialize)]
+struct RestaurantSummary {
+    id: i64,
+    slug: String,
+    name: String,
+}
+
+#[derive(Deserialize)]
+struct RestaurantFilter {
+    restaurant_id: Option<i64>,
+}
+
+#[derive(Serialize)]
 struct MenuCategory {
     id: i64,
+    restaurant_id: i64,
+    restaurant_name: String,
     name: String,
     slug: String,
 }
@@ -69,6 +83,8 @@ struct MenuCategory {
 #[derive(Serialize)]
 struct MenuItem {
     id: i64,
+    restaurant_id: i64,
+    restaurant_name: String,
     category_id: Option<i64>,
     category_name: Option<String>,
     name: String,
@@ -155,11 +171,15 @@ async fn readiness(State(state): State<AppState>) -> Result<Json<HealthResponse>
     Ok(Json(HealthResponse { status: "ready" }))
 }
 
-async fn list_categories(
+async fn list_restaurants(
     State(state): State<AppState>,
-) -> Result<Json<Vec<MenuCategory>>, ApiError> {
+) -> Result<Json<Vec<RestaurantSummary>>, ApiError> {
     let rows = sqlx::query_as::<_, (i64, String, String)>(
-        "SELECT id, name, slug FROM menu_categories ORDER BY name ASC LIMIT 200",
+        "SELECT id, slug, name
+         FROM restaurants
+         WHERE status = 'active'
+         ORDER BY name ASC
+         LIMIT 200",
     )
     .fetch_all(&state.db)
     .await
@@ -167,19 +187,29 @@ async fn list_categories(
 
     Ok(Json(
         rows.into_iter()
-            .map(|(id, name, slug)| MenuCategory { id, name, slug })
+            .map(|(id, slug, name)| RestaurantSummary { id, slug, name })
             .collect(),
     ))
 }
 
-async fn list_menu_items(State(state): State<AppState>) -> Result<Json<Vec<MenuItem>>, ApiError> {
-    let rows = sqlx::query_as::<_, (i64, Option<i64>, Option<String>, String, String, i64, bool)>(
-        "SELECT mi.id, mi.category_id, mc.name, mi.name, mi.description, mi.price_minor, mi.available
-         FROM menu_items mi
-         LEFT JOIN menu_categories mc ON mc.id = mi.category_id
-         ORDER BY mi.name ASC
+async fn list_categories(
+    State(state): State<AppState>,
+    Query(filter): Query<RestaurantFilter>,
+) -> Result<Json<Vec<MenuCategory>>, ApiError> {
+    if filter.restaurant_id.is_some_and(|id| id <= 0) {
+        return Err(ApiError::BadRequest("restaurant_id must be positive"));
+    }
+
+    let rows = sqlx::query_as::<_, (i64, i64, String, String, String)>(
+        "SELECT mc.id, mc.restaurant_id, r.name, mc.name, mc.slug
+         FROM menu_categories mc
+         INNER JOIN restaurants r ON r.id = mc.restaurant_id
+         WHERE r.status = 'active'
+           AND ($1::bigint IS NULL OR mc.restaurant_id = $1)
+         ORDER BY r.name ASC, mc.name ASC
          LIMIT 500",
     )
+    .bind(filter.restaurant_id)
     .fetch_all(&state.db)
     .await
     .map_err(|_| ApiError::Internal)?;
@@ -187,16 +217,79 @@ async fn list_menu_items(State(state): State<AppState>) -> Result<Json<Vec<MenuI
     Ok(Json(
         rows.into_iter()
             .map(
-                |(id, category_id, category_name, name, description, price_minor, available)| {
-                    MenuItem {
-                        id,
-                        category_id,
-                        category_name,
-                        name,
-                        description,
-                        price_minor,
-                        available,
-                    }
+                |(id, restaurant_id, restaurant_name, name, slug)| MenuCategory {
+                    id,
+                    restaurant_id,
+                    restaurant_name,
+                    name,
+                    slug,
+                },
+            )
+            .collect(),
+    ))
+}
+
+async fn list_menu_items(
+    State(state): State<AppState>,
+    Query(filter): Query<RestaurantFilter>,
+) -> Result<Json<Vec<MenuItem>>, ApiError> {
+    if filter.restaurant_id.is_some_and(|id| id <= 0) {
+        return Err(ApiError::BadRequest("restaurant_id must be positive"));
+    }
+
+    let rows = sqlx::query_as::<
+        _,
+        (
+            i64,
+            i64,
+            String,
+            Option<i64>,
+            Option<String>,
+            String,
+            String,
+            i64,
+            bool,
+        ),
+    >(
+        "SELECT mi.id, mi.restaurant_id, r.name, mi.category_id, mc.name,
+                mi.name, mi.description, mi.price_minor, mi.available
+         FROM menu_items mi
+         INNER JOIN restaurants r ON r.id = mi.restaurant_id
+         LEFT JOIN menu_categories mc
+           ON mc.restaurant_id = mi.restaurant_id AND mc.id = mi.category_id
+         WHERE r.status = 'active'
+           AND ($1::bigint IS NULL OR mi.restaurant_id = $1)
+         ORDER BY r.name ASC, mi.name ASC
+         LIMIT 1000",
+    )
+    .bind(filter.restaurant_id)
+    .fetch_all(&state.db)
+    .await
+    .map_err(|_| ApiError::Internal)?;
+
+    Ok(Json(
+        rows.into_iter()
+            .map(
+                |(
+                    id,
+                    restaurant_id,
+                    restaurant_name,
+                    category_id,
+                    category_name,
+                    name,
+                    description,
+                    price_minor,
+                    available,
+                )| MenuItem {
+                    id,
+                    restaurant_id,
+                    restaurant_name,
+                    category_id,
+                    category_name,
+                    name,
+                    description,
+                    price_minor,
+                    available,
                 },
             )
             .collect(),
@@ -230,11 +323,15 @@ async fn create_order(
 
     let mut tx = state.db.begin().await.map_err(|_| ApiError::Internal)?;
     let mut total_minor: i64 = 0;
+    let mut restaurant_id: Option<i64> = None;
     let mut order_lines = Vec::with_capacity(payload.items.len());
 
     for item in &payload.items {
-        let menu_item = sqlx::query_as::<_, (i64, bool)>(
-            "SELECT price_minor, available FROM menu_items WHERE id = $1 FOR SHARE",
+        let menu_item = sqlx::query_as::<_, (i64, bool, i64, String)>(
+            "SELECT mi.price_minor, mi.available, mi.restaurant_id, r.status
+             FROM menu_items mi
+             INNER JOIN restaurants r ON r.id = mi.restaurant_id
+             WHERE mi.id = $1 FOR SHARE OF mi",
         )
         .bind(item.menu_item_id)
         .fetch_optional(&mut *tx)
@@ -242,10 +339,19 @@ async fn create_order(
         .map_err(|_| ApiError::Internal)?
         .ok_or(ApiError::NotFound("one or more menu items do not exist"))?;
 
-        let (unit_price_minor, available) = menu_item;
+        let (unit_price_minor, available, item_restaurant_id, restaurant_status) = menu_item;
+        if restaurant_status != "active" {
+            return Err(ApiError::Conflict("restaurant is not accepting orders"));
+        }
         if !available {
             return Err(ApiError::Conflict("one or more menu items are unavailable"));
         }
+        if restaurant_id.is_some_and(|id| id != item_restaurant_id) {
+            return Err(ApiError::BadRequest(
+                "orders may contain items from one restaurant only",
+            ));
+        }
+        restaurant_id = Some(item_restaurant_id);
 
         let line_total = unit_price_minor
             .checked_mul(i64::from(item.quantity))
@@ -253,15 +359,22 @@ async fn create_order(
         total_minor = total_minor
             .checked_add(line_total)
             .ok_or(ApiError::BadRequest("order total is out of range"))?;
-        order_lines.push((item.menu_item_id, item.quantity, unit_price_minor));
+        order_lines.push((
+            item_restaurant_id,
+            item.menu_item_id,
+            item.quantity,
+            unit_price_minor,
+        ));
     }
 
+    let restaurant_id = restaurant_id.ok_or(ApiError::BadRequest("items are required"))?;
     let order_number = format!("AUR-{}", Uuid::new_v4().simple());
     let (order_id, status) = sqlx::query_as::<_, (i64, String)>(
-        "INSERT INTO orders (order_number, customer_name, status, total_minor)
-         VALUES ($1, $2, 'pending', $3)
+        "INSERT INTO orders (restaurant_id, order_number, customer_name, status, total_minor)
+         VALUES ($1, $2, $3, 'pending', $4)
          RETURNING id, status",
     )
+    .bind(restaurant_id)
     .bind(&order_number)
     .bind(customer_name)
     .bind(total_minor)
@@ -269,11 +382,13 @@ async fn create_order(
     .await
     .map_err(|_| ApiError::Internal)?;
 
-    for (menu_item_id, quantity, unit_price_minor) in order_lines {
+    for (line_restaurant_id, menu_item_id, quantity, unit_price_minor) in order_lines {
         sqlx::query(
-            "INSERT INTO order_lines (order_id, menu_item_id, quantity, unit_price_minor)
-             VALUES ($1, $2, $3, $4)",
+            "INSERT INTO order_lines
+                (restaurant_id, order_id, menu_item_id, quantity, unit_price_minor)
+             VALUES ($1, $2, $3, $4, $5)",
         )
+        .bind(line_restaurant_id)
         .bind(order_id)
         .bind(menu_item_id)
         .bind(quantity)
@@ -296,15 +411,21 @@ async fn create_order(
     ))
 }
 
-async fn fetch_orders(db: &PgPool, active_only: bool) -> Result<Response, ApiError> {
+async fn fetch_orders(
+    db: &PgPool,
+    active_only: bool,
+    restaurant_id: Option<i64>,
+) -> Result<Response, ApiError> {
     let rows = if active_only {
         sqlx::query_as::<_, (i64, String, String, String, i64)>(
             "SELECT id, order_number, customer_name, status, total_minor
              FROM orders
-             WHERE status IN ('pending', 'accepted', 'preparing', 'ready')
+             WHERE ($1::bigint IS NULL OR restaurant_id = $1)
+               AND status IN ('pending', 'accepted', 'preparing', 'ready')
              ORDER BY created_at ASC
              LIMIT 200",
         )
+        .bind(restaurant_id)
         .fetch_all(db)
         .await
         .map_err(|_| ApiError::Internal)?
@@ -312,9 +433,11 @@ async fn fetch_orders(db: &PgPool, active_only: bool) -> Result<Response, ApiErr
         sqlx::query_as::<_, (i64, String, String, String, i64)>(
             "SELECT id, order_number, customer_name, status, total_minor
              FROM orders
+             WHERE ($1::bigint IS NULL OR restaurant_id = $1)
              ORDER BY created_at DESC
              LIMIT 200",
         )
+        .bind(restaurant_id)
         .fetch_all(db)
         .await
         .map_err(|_| ApiError::Internal)?
@@ -354,7 +477,7 @@ fn valid_order_transition(from: &str, to: &str) -> bool {
 }
 
 fn role_can_update_order_status(role: &str, from: &str, to: &str) -> bool {
-    if matches!(role, "owner" | "manager") {
+    if matches!(role, "owner" | "restaurant_owner" | "manager") {
         return valid_order_transition(from, to);
     }
 
@@ -394,18 +517,33 @@ async fn update_order_status(
     }
 
     let mut tx = state.db.begin().await.map_err(|_| ApiError::Internal)?;
-    let current_status: Option<String> =
-        sqlx::query_scalar("SELECT status FROM orders WHERE id = $1 FOR UPDATE")
+    let order: Option<(String, i64)> =
+        sqlx::query_as("SELECT status, restaurant_id FROM orders WHERE id = $1 FOR UPDATE")
             .bind(order_id)
             .fetch_optional(&mut *tx)
             .await
             .map_err(|_| ApiError::Internal)?;
-    let current_status = current_status.ok_or(ApiError::NotFound("order not found"))?;
+    let (current_status, restaurant_id) = order.ok_or(ApiError::NotFound("order not found"))?;
+
+    let restaurant_role = if staff.role == "owner" {
+        "owner".to_owned()
+    } else {
+        sqlx::query_scalar::<_, String>(
+            "SELECT role FROM restaurant_staff_memberships
+             WHERE staff_user_id = $1 AND restaurant_id = $2 AND is_active = TRUE",
+        )
+        .bind(staff.id)
+        .bind(restaurant_id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|_| ApiError::Internal)?
+        .ok_or(ApiError::Forbidden)?
+    };
 
     if !valid_order_transition(&current_status, &payload.status) {
         return Err(ApiError::Conflict("invalid order status transition"));
     }
-    if !role_can_update_order_status(&staff.role, &current_status, &payload.status) {
+    if !role_can_update_order_status(&restaurant_role, &current_status, &payload.status) {
         return Err(ApiError::Forbidden);
     }
 
@@ -421,9 +559,10 @@ async fn update_order_status(
 
     sqlx::query(
         "INSERT INTO order_status_events
-            (order_id, actor_staff_user_id, from_status, to_status)
-         VALUES ($1, $2, $3, $4)",
+            (restaurant_id, order_id, actor_staff_user_id, from_status, to_status)
+         VALUES ($1, $2, $3, $4, $5)",
     )
+    .bind(restaurant_id)
     .bind(order_id)
     .bind(staff.id)
     .bind(&current_status)
@@ -447,15 +586,47 @@ async fn update_order_status(
     ))
 }
 
+async fn default_restaurant_id(db: &PgPool) -> Result<i64, ApiError> {
+    sqlx::query_scalar("SELECT id FROM restaurants WHERE is_default = TRUE")
+        .fetch_optional(db)
+        .await
+        .map_err(|_| ApiError::Internal)?
+        .ok_or(ApiError::Internal)
+}
+
+async fn restaurant_staff_role(
+    db: &PgPool,
+    staff_user_id: i64,
+    restaurant_id: i64,
+) -> Result<Option<String>, ApiError> {
+    sqlx::query_scalar(
+        "SELECT role FROM restaurant_staff_memberships
+         WHERE staff_user_id = $1 AND restaurant_id = $2 AND is_active = TRUE",
+    )
+    .bind(staff_user_id)
+    .bind(restaurant_id)
+    .fetch_optional(db)
+    .await
+    .map_err(|_| ApiError::Internal)
+}
+
 async fn list_admin_orders(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     let staff = auth::current_staff(&state, &headers).await?;
-    if !auth::can_view_admin_orders(&staff.role) {
+    if staff.role == "owner" {
+        return fetch_orders(&state.db, false, None).await;
+    }
+
+    let restaurant_id = default_restaurant_id(&state.db).await?;
+    let role = restaurant_staff_role(&state.db, staff.id, restaurant_id)
+        .await?
+        .ok_or(ApiError::Forbidden)?;
+    if !matches!(role.as_str(), "restaurant_owner" | "manager" | "cashier") {
         return Err(ApiError::Forbidden);
     }
-    fetch_orders(&state.db, false).await
+    fetch_orders(&state.db, false, Some(restaurant_id)).await
 }
 
 async fn list_kitchen_orders(
@@ -463,10 +634,18 @@ async fn list_kitchen_orders(
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     let staff = auth::current_staff(&state, &headers).await?;
-    if !auth::can_view_kitchen_orders(&staff.role) {
+    if staff.role == "owner" {
+        return fetch_orders(&state.db, true, None).await;
+    }
+
+    let restaurant_id = default_restaurant_id(&state.db).await?;
+    let role = restaurant_staff_role(&state.db, staff.id, restaurant_id)
+        .await?
+        .ok_or(ApiError::Forbidden)?;
+    if !matches!(role.as_str(), "restaurant_owner" | "manager" | "chef") {
         return Err(ApiError::Forbidden);
     }
-    fetch_orders(&state.db, true).await
+    fetch_orders(&state.db, true, Some(restaurant_id)).await
 }
 
 async fn list_service_orders(
@@ -474,10 +653,18 @@ async fn list_service_orders(
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     let staff = auth::current_staff(&state, &headers).await?;
-    if !auth::can_view_service_orders(&staff.role) {
+    if staff.role == "owner" {
+        return fetch_orders(&state.db, true, None).await;
+    }
+
+    let restaurant_id = default_restaurant_id(&state.db).await?;
+    let role = restaurant_staff_role(&state.db, staff.id, restaurant_id)
+        .await?
+        .ok_or(ApiError::Forbidden)?;
+    if !matches!(role.as_str(), "restaurant_owner" | "manager" | "waiter") {
         return Err(ApiError::Forbidden);
     }
-    fetch_orders(&state.db, true).await
+    fetch_orders(&state.db, true, Some(restaurant_id)).await
 }
 
 async fn list_audit_events(
@@ -677,6 +864,7 @@ async fn main() {
     let app = Router::new()
         .route("/health", get(health))
         .route("/ready", get(readiness))
+        .route("/api/restaurants", get(list_restaurants))
         .route("/api/menu/categories", get(list_categories))
         .route("/api/menu/items", get(list_menu_items))
         .route("/api/orders", axum::routing::post(create_order))
@@ -889,6 +1077,15 @@ mod tests {
                 .expect("provisioned chef account should exist");
         let chef_id = chef.0;
         assert_eq!(chef.1, "chef");
+        let chef_membership: (i64, String) = sqlx::query_as(
+            "SELECT restaurant_id, role FROM restaurant_staff_memberships
+             WHERE staff_user_id = $1 AND is_active = TRUE",
+        )
+        .bind(chef_id)
+        .fetch_one(&db)
+        .await
+        .expect("CLI-created staff should receive a default restaurant membership");
+        assert_eq!(chef_membership, (1, "chef".to_owned()));
 
         let state = AppState {
             db: db.clone(),
@@ -1314,14 +1511,79 @@ mod tests {
         assert_eq!(created.total_minor, 25_000);
         assert_eq!(created.status, "pending");
 
-        let saved_line: (i32, i64) = sqlx::query_as(
-            "SELECT quantity, unit_price_minor FROM order_lines WHERE order_id = $1",
+        let saved_line: (i32, i64, i64, i64) = sqlx::query_as(
+            "SELECT quantity, unit_price_minor, restaurant_id, order_id
+             FROM order_lines WHERE order_id = $1",
         )
         .bind(created.id)
         .fetch_one(&db)
         .await
         .expect("persisted order line should exist");
-        assert_eq!(saved_line, (2, 12_500));
+        assert_eq!(saved_line, (2, 12_500, 1, created.id));
+
+        let second_restaurant_id: i64 = sqlx::query_scalar(
+            "INSERT INTO restaurants (slug, name, status)
+             VALUES ($1, 'Cart Isolation Restaurant', 'active')
+             RETURNING id",
+        )
+        .bind(format!("cart-test-{}", Uuid::new_v4().simple()))
+        .fetch_one(&db)
+        .await
+        .expect("create second restaurant for cart test");
+        let second_restaurant_item_id: i64 = sqlx::query_scalar(
+            "INSERT INTO menu_items (restaurant_id, name, price_minor, available)
+             VALUES ($1, 'Second Restaurant Dish', 7000, TRUE)
+             RETURNING id",
+        )
+        .bind(second_restaurant_id)
+        .fetch_one(&db)
+        .await
+        .expect("create second restaurant dish");
+
+        assert!(matches!(
+            submit(
+                &db,
+                "Integration Test",
+                vec![
+                    OrderItemInput {
+                        menu_item_id: available_item_id,
+                        quantity: 1,
+                    },
+                    OrderItemInput {
+                        menu_item_id: second_restaurant_item_id,
+                        quantity: 1,
+                    },
+                ],
+            )
+            .await,
+            Err(ApiError::BadRequest(_))
+        ));
+
+        let filtered_items = list_menu_items(
+            State(AppState {
+                db: db.clone(),
+                cookie_secure: false,
+                csrf_allowed_origins: vec![],
+            }),
+            Query(RestaurantFilter {
+                restaurant_id: Some(second_restaurant_id),
+            }),
+        )
+        .await
+        .expect("tenant-filtered menu query should work");
+        assert_eq!(filtered_items.0.len(), 1);
+        assert_eq!(filtered_items.0[0].restaurant_id, second_restaurant_id);
+        let active_restaurants = list_restaurants(State(AppState {
+            db: db.clone(),
+            cookie_secure: false,
+            csrf_allowed_origins: vec![],
+        }))
+        .await
+        .expect("active restaurant directory should work");
+        assert!(active_restaurants
+            .0
+            .iter()
+            .any(|restaurant| restaurant.id == second_restaurant_id));
 
         let unavailable_item_id: i64 = sqlx::query_scalar(
             "INSERT INTO menu_items (name, price_minor, available)
@@ -1447,6 +1709,35 @@ mod tests {
         .await
         .expect("create second order");
 
+        let other_restaurant_id: i64 = sqlx::query_scalar(
+            "INSERT INTO restaurants (slug, name, status)
+             VALUES ($1, 'Tenant Two', 'active')
+             RETURNING id",
+        )
+        .bind(format!("status-test-{}", Uuid::new_v4().simple()))
+        .fetch_one(&db)
+        .await
+        .expect("create tenant two");
+        let other_item_id: i64 = sqlx::query_scalar(
+            "INSERT INTO menu_items (restaurant_id, name, price_minor, available)
+             VALUES ($1, 'Tenant Two Item', 2000, TRUE)
+             RETURNING id",
+        )
+        .bind(other_restaurant_id)
+        .fetch_one(&db)
+        .await
+        .expect("create tenant two menu item");
+        let (_, Json(other_order)) = submit(
+            &db,
+            "Tenant Two Customer",
+            vec![OrderItemInput {
+                menu_item_id: other_item_id,
+                quantity: 1,
+            }],
+        )
+        .await
+        .expect("create tenant two order");
+
         let state = AppState {
             db: db.clone(),
             cookie_secure: false,
@@ -1455,6 +1746,41 @@ mod tests {
         let owner_headers = staff_session_headers(&state, "owner_01", owner_password).await;
         let chef_headers = staff_session_headers(&state, "chef_01", chef_password).await;
         let waiter_headers = staff_session_headers(&state, "waiter_01", waiter_password).await;
+
+        assert!(matches!(
+            update_order_status(
+                State(state.clone()),
+                chef_headers.clone(),
+                Path(other_order.id),
+                Json(UpdateOrderStatusRequest {
+                    status: "accepted".to_owned(),
+                }),
+            )
+            .await,
+            Err(ApiError::Forbidden)
+        ));
+
+        let (_, _, Json(tenant_two_accepted)) = update_order_status(
+            State(state.clone()),
+            owner_headers.clone(),
+            Path(other_order.id),
+            Json(UpdateOrderStatusRequest {
+                status: "accepted".to_owned(),
+            }),
+        )
+        .await
+        .expect("platform owner may update an order across tenants");
+        assert_eq!(tenant_two_accepted.status, "accepted");
+
+        let kitchen_response = list_kitchen_orders(State(state.clone()), chef_headers.clone())
+            .await
+            .expect("chef may read their restaurant orders");
+        let kitchen_body = axum::body::to_bytes(kitchen_response.into_body(), usize::MAX)
+            .await
+            .expect("read kitchen response");
+        let kitchen_json = String::from_utf8(kitchen_body.to_vec()).expect("UTF-8 JSON response");
+        assert!(kitchen_json.contains(&first_order.order_number));
+        assert!(!kitchen_json.contains(&other_order.order_number));
 
         let mut missing_origin = owner_headers.clone();
         missing_origin.remove(header::ORIGIN);
@@ -1568,6 +1894,7 @@ mod tests {
         assert_eq!(
             events,
             vec![
+                (other_order.id, "pending".to_owned(), "accepted".to_owned()),
                 (first_order.id, "pending".to_owned(), "accepted".to_owned()),
                 (
                     first_order.id,
@@ -1590,6 +1917,11 @@ mod tests {
     fn order_status_transition_roles_are_restricted() {
         assert!(role_can_update_order_status(
             "owner",
+            "preparing",
+            "cancelled"
+        ));
+        assert!(role_can_update_order_status(
+            "restaurant_owner",
             "preparing",
             "cancelled"
         ));

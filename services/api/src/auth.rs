@@ -13,7 +13,6 @@ use rand::{rngs::OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
-use std::str::FromStr;
 
 use crate::{ApiError, AppState};
 
@@ -210,6 +209,23 @@ pub(crate) async fn create_staff(
     .await
     .map_err(|_| "could not create staff account; username may already exist".to_owned())?;
 
+    let default_restaurant_id: i64 =
+        sqlx::query_scalar("SELECT id FROM restaurants WHERE is_default = TRUE")
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(|_| "could not locate the default restaurant".to_owned())?;
+
+    sqlx::query(
+        "INSERT INTO restaurant_staff_memberships (restaurant_id, staff_user_id, role)
+         VALUES ($1, $2, $3)",
+    )
+    .bind(default_restaurant_id)
+    .bind(staff_id)
+    .bind(role)
+    .execute(&mut *tx)
+    .await
+    .map_err(|_| "could not assign staff to the default restaurant".to_owned())?;
+
     sqlx::query(
         "INSERT INTO staff_audit_log (event_type, subject_staff_user_id, subject_role)
          VALUES ('staff_provisioned_cli', $1, $2)",
@@ -305,18 +321,6 @@ pub(crate) async fn current_staff(
     .ok_or(ApiError::Unauthorized)?;
 
     Ok(staff)
-}
-
-pub(crate) fn can_view_admin_orders(role: &str) -> bool {
-    matches!(role, "owner" | "manager" | "cashier")
-}
-
-pub(crate) fn can_view_kitchen_orders(role: &str) -> bool {
-    matches!(role, "owner" | "manager" | "chef")
-}
-
-pub(crate) fn can_view_service_orders(role: &str) -> bool {
-    matches!(role, "owner" | "manager" | "waiter")
 }
 
 pub(crate) async fn login(
@@ -485,21 +489,6 @@ mod tests {
         assert!(validate_password("correct-horse-12").is_ok());
         assert!(validate_password("short").is_err());
         assert!(validate_password(&"x".repeat(129)).is_err());
-    }
-
-    #[test]
-    fn role_permissions_are_separated_by_work_area() {
-        assert!(can_view_admin_orders("owner"));
-        assert!(can_view_admin_orders("manager"));
-        assert!(can_view_admin_orders("cashier"));
-        assert!(!can_view_admin_orders("chef"));
-        assert!(!can_view_admin_orders("waiter"));
-
-        assert!(can_view_kitchen_orders("chef"));
-        assert!(!can_view_kitchen_orders("cashier"));
-
-        assert!(can_view_service_orders("waiter"));
-        assert!(!can_view_service_orders("chef"));
     }
 
     #[test]
