@@ -5,7 +5,7 @@ import {
 } from 'lucide-react';
 import StaffPortal from './StaffPortal';
 
-type Restaurant = { id: number; slug: string; name: string };
+type Restaurant = { id: number; slug: string; name: string; city: string; cuisine: string; description: string };
 type MenuCategory = { id: number; restaurant_id: number; restaurant_name: string; name: string; slug: string };
 type MenuItem = {
   id: number; restaurant_id: number; restaurant_name: string; category_id: number | null;
@@ -129,7 +129,7 @@ function Storefront() {
 
   const restaurantCards = useMemo(() => restaurants.map((restaurant) => {
     const restaurantItems = items.filter((item) => item.restaurant_id === restaurant.id);
-    const cuisines = [...new Set(restaurantItems.map((item) => item.category_name).filter(Boolean))] as string[];
+    const cuisines = restaurant.cuisine ? [restaurant.cuisine] : [...new Set(restaurantItems.map((item) => item.category_name).filter(Boolean))] as string[];
     const term = search.trim().toLowerCase();
     const matches = !term || restaurant.name.toLowerCase().includes(term)
       || restaurantItems.some((item) => item.name.toLowerCase().includes(term)
@@ -283,7 +283,7 @@ function Storefront() {
               <div className="restaurant-banner">
                 <div className="restaurant-banner-art"><span>{foodEmoji(restaurantCategories[0])}</span></div>
                 <div className="restaurant-banner-copy"><span className="section-kicker">MENU / {activeRestaurant.slug.toUpperCase()}</span>
-                  <h3>{activeRestaurant.name}</h3><p>{formatAmount(restaurantItems.length)} انتخاب در منو</p>
+                  <h3>{activeRestaurant.name}</h3><p>{activeRestaurant.description || formatAmount(restaurantItems.length) + ' انتخاب در منو'}{activeRestaurant.city ? ' · ' + activeRestaurant.city : ''}</p>
                 </div>
               </div>
               <div className="menu-filter-row">
@@ -327,7 +327,7 @@ function Storefront() {
                       <span className="restaurant-count">{formatAmount(restaurant.itemCount)} آیتم</span><span className="cover-mark">{String(index + 1).padStart(2, '0')}</span>
                     </div>
                     <div className="restaurant-card-body"><h3>{restaurant.name}</h3>
-                      <p>{restaurant.cuisines.length ? restaurant.cuisines.slice(0, 3).join(' · ') : 'منوی رستوران'}</p>
+                      <p>{restaurant.cuisines.length ? restaurant.cuisines.slice(0, 3).join(' · ') : 'منوی رستوران'}{restaurant.city ? ' · ' + restaurant.city : ''}</p>
                       <div className="restaurant-card-bottom"><span>مشاهده منو</span><ArrowLeft size={16} /></div>
                     </div>
                   </button>
