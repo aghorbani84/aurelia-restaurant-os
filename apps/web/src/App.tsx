@@ -125,6 +125,8 @@ function Storefront() {
     return { ...restaurant, itemCount: restaurantItems.length, cuisines, matches };
   }), [restaurants, items, search]);
 
+  const visibleRestaurantCards = restaurantCards.filter((restaurant) => restaurant.matches && restaurant.itemCount > 0);
+
   const marketplaceResults = useMemo(
     () => items.filter((item) => item.available && (!search.trim()
       || item.name.toLowerCase().includes(search.trim().toLowerCase())
@@ -306,7 +308,7 @@ function Storefront() {
                 <p className="search-hint">برای افزودن غذا به سبد، ابتدا منوی رستوران را باز کنید.</p>
               </div>}
               <div className="restaurant-grid">
-                {restaurantCards.filter((restaurant) => restaurant.matches).map((restaurant, index) => <article className="restaurant-card" key={restaurant.id}>
+                {visibleRestaurantCards.map((restaurant, index) => <article className="restaurant-card" key={restaurant.id}>
                   <button className="restaurant-card-open" onClick={() => openRestaurant(restaurant.id)}>
                     <div className={"restaurant-cover tone-" + (index % 4)}>
                       <span className="restaurant-cover-emoji">{foodEmoji(restaurant.cuisines[0])}</span>
@@ -319,8 +321,8 @@ function Storefront() {
                   </button>
                 </article>)}
               </div>
-              {!restaurantCards.some((restaurant) => restaurant.matches) && !marketplaceResults.length && <div className="market-state"><CircleHelp size={25} /> نتیجه‌ای پیدا نشد؛ نام غذا یا رستوران دیگری را امتحان کنید.</div>}
-              {!restaurants.length && !search && <div className="market-state empty-market"><Store size={26} /><strong>هنوز رستورانی فعال نشده</strong><span>با ثبت اولین رستوران، اینجا منوهای آن نمایش داده می‌شود.</span></div>}
+              {!visibleRestaurantCards.length && !marketplaceResults.length && <div className="market-state"><CircleHelp size={25} /> نتیجه‌ای پیدا نشد؛ نام غذا یا رستوران دیگری را امتحان کنید.</div>}
+              {!visibleRestaurantCards.length && !search && <div className="market-state empty-market"><Store size={26} /><strong>هنوز رستورانی فعال نشده</strong><span>با ثبت اولین رستوران، اینجا منوهای آن نمایش داده می‌شود.</span></div>}
             </>
           )}
         </section>
