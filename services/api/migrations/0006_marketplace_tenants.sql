@@ -65,7 +65,7 @@ ALTER TABLE menu_items
     ADD CONSTRAINT menu_items_restaurant_category_fk
         FOREIGN KEY (restaurant_id, category_id)
         REFERENCES menu_categories (restaurant_id, id)
-        ON DELETE SET NULL;
+        ON DELETE SET NULL (category_id);
 
 ALTER TABLE orders
     ADD COLUMN restaurant_id BIGINT NOT NULL DEFAULT 1
@@ -76,12 +76,11 @@ ALTER TABLE orders
 ALTER TABLE order_lines
     ADD COLUMN restaurant_id BIGINT NOT NULL DEFAULT 1
         REFERENCES restaurants(id) ON DELETE RESTRICT,
-    ADD COLUMN item_name_snapshot TEXT NOT NULL DEFAULT '';
+;
 UPDATE order_lines ol
-SET restaurant_id = o.restaurant_id,
-    item_name_snapshot = mi.name
-FROM orders o, menu_items mi
-WHERE ol.order_id = o.id AND ol.menu_item_id = mi.id;
+SET restaurant_id = o.restaurant_id
+FROM orders o
+WHERE ol.order_id = o.id;
 
 ALTER TABLE order_lines
     DROP CONSTRAINT IF EXISTS order_lines_order_id_fkey,
