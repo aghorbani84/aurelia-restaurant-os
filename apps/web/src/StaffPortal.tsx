@@ -1,8 +1,23 @@
 import { FormEvent, useEffect, useState } from 'react';
-import { ArrowLeft, ChefHat, ClipboardList, History, LoaderCircle, LogOut, RefreshCw, ShieldCheck, UserRound } from 'lucide-react';
+import { ArrowLeft, ChefHat, ClipboardList, History, LoaderCircle, LogOut, RefreshCw, ShieldCheck, Store, UserRound } from 'lucide-react';
 
 type StaffRole = 'owner' | 'manager' | 'cashier' | 'chef' | 'waiter';
+type AuditRole = StaffRole | 'restaurant_owner';
 type StaffIdentity = { id: number; username: string; role: StaffRole };
+type PendingRestaurantApplication = {
+  id: number;
+  restaurant_id: number;
+  restaurant_name: string;
+  owner_username: string;
+  contact_name: string;
+  contact_phone: string;
+  contact_email: string;
+  city: string;
+  address: string;
+  cuisine: string;
+  description: string;
+  submitted_at: string;
+};
 type OrderSummary = {
   id: number;
   order_number: string;
@@ -18,7 +33,7 @@ type AuditEvent = {
   subject_staff_user_id: number | null;
   subject_username: string | null;
   attempted_username: string | null;
-  subject_role: StaffRole | null;
+  subject_role: AuditRole | null;
   created_at: string;
 };
 type AuditPage = { events: AuditEvent[]; next_cursor: number | null };
@@ -57,6 +72,9 @@ const auditEventLabels: Record<string, string> = {
   staff_login_succeeded: 'ورود موفق',
   staff_login_failed: 'ورود ناموفق',
   staff_logout: 'خروج از حساب',
+  restaurant_application_submitted: 'ثبت درخواست رستوران',
+  restaurant_application_approved: 'تأیید رستوران',
+  restaurant_application_rejected: 'رد درخواست رستوران',
 };
 
 const formatAuditTime = (value: string) => {
@@ -80,7 +98,7 @@ function isAuditPage(value: unknown): value is AuditPage {
       && (event.subject_staff_user_id === null || typeof event.subject_staff_user_id === 'number')
       && (event.subject_username === null || typeof event.subject_username === 'string')
       && (event.attempted_username === null || typeof event.attempted_username === 'string')
-      && (event.subject_role === null || ['owner', 'manager', 'cashier', 'chef', 'waiter'].includes(String(event.subject_role)))
+      && (event.subject_role === null || ['owner', 'manager', 'cashier', 'chef', 'waiter', 'restaurant_owner'].includes(String(event.subject_role)))
       && typeof event.created_at === 'string';
   });
 }
@@ -114,6 +132,11 @@ export default function StaffPortal() {
   const [auditLoading, setAuditLoading] = useState(false);
   const [auditError, setAuditError] = useState('');
   const [auditRefreshKey, setAuditRefreshKey] = useState(0);
+  const [applications, setApplications] = useState<PendingRestaurantApplication[]>([]);
+  const [applicationsLoading, setApplicationsLoading] = useState(false);
+  const [applicationsError, setApplicationsError] = useState('');
+  const [reviewingApplicationId, setReviewingApplicationId] = useState<number | null>(null);
+  const [applicationsRefreshKey, setApplicationsRefreshKey] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -195,6 +218,54 @@ export default function StaffPortal() {
       });
     return () => { cancelled = true; };
   }, [identity, auditRefreshKey]);
+
+  useEffect(() => {
+    if (identity?.role !== 'owner') {
+      setApplications([]);
+      setApplicationsError('');
+      return;
+    }
+    let cancelled = false;
+    setApplicationsLoading(true);
+    setApplicationsError('');
+    fetch('/api/admin/restaurants/applications', { credentials: 'same-origin', cache: 'no-store' })
+      .then(async (response) => {
+        if (!response.ok) throw await responseError(response, 'دریافت درخواست‌های رستوران ناموفق بود.');
+        const body: unknown = await response.json();
+        if (!Array.isArray(body)) throw new Error('ساختار درخواست‌های رستوران معتبر نیست.');
+        return body as PendingRestaurantApplication[];
+      })
+      .then((data) => { if (!cancelled) setApplications(data); })
+      .catch((reason: unknown) => {
+        if (!cancelled) setApplicationsError(reason instanceof Error ? reason.message : 'دریافت درخواست‌ها ناموفق بود.');
+      })
+      .finally(() => { if (!cancelled) setApplicationsLoading(false); });
+    return () => { cancelled = true; };
+  }, [identity, applicationsRefreshKey]);
+
+  async function reviewApplication(applicationId: number, decision: 'approve' | 'reject') {
+    if (decision === 'reject' && !window.confirm('این درخواست رد شود؟ حساب مالک غیرفعال باقی می‌ماند.')) return;
+    setReviewingApplicationId(applicationId);
+    setApplicationsError('');
+    setError('');
+    try {
+      const response = await fetch('/api/admin/restaurants/applications/' + applicationId + '/review', {
+        method: 'POST',
+        credentials: 'same-origin',
+        cache: 'no-store',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ decision, note: '' }),
+      });
+      if (!response.ok) throw await responseError(response, 'بررسی درخواست انجام نشد.');
+      setApplications((current) => current.filter((application) => application.id !== applicationId));
+      setNotice(decision === 'approve' ? 'رستوران تأیید و حساب مالک فعال شد.' : 'درخواست رد شد.');
+      setAuditRefreshKey((key) => key + 1);
+    } catch (reason) {
+      setApplicationsError(reason instanceof Error ? reason.message : 'بررسی درخواست ناموفق بود.');
+    } finally {
+      setReviewingApplicationId(null);
+    }
+  }
 
   async function loadMoreAudit() {
     if (identity?.role !== 'owner' || auditCursor === null || auditLoading) return;
@@ -347,7 +418,52 @@ export default function StaffPortal() {
             )}
             <p className="staff-readonly-note">این پنل در این مرحله فقط سفارش‌ها را نمایش می‌دهد؛ تغییر وضعیت، مدیریت کارکنان و عملیات مالی هنوز فعال نیست.</p>
             {identity.role === 'owner' && (
-              <section className="staff-audit-section" aria-labelledby="staff-audit-title">
+              <>
+                <section className="staff-applications-section" aria-labelledby="restaurant-applications-title">
+                  <div className="staff-section-title">
+                    <div><Store size={19} /><h2 id="restaurant-applications-title">درخواست‌های ثبت رستوران</h2></div>
+                    <button className="staff-ghost-button" onClick={() => setApplicationsRefreshKey((key) => key + 1)} disabled={applicationsLoading}>
+                      <RefreshCw size={15} /> تازه‌سازی
+                    </button>
+                  </div>
+                  {applicationsError && <p className="staff-feedback staff-error" role="alert">{applicationsError}</p>}
+                  {applicationsLoading && applications.length === 0 ? (
+                    <div className="staff-state"><LoaderCircle className="spin" /> در حال دریافت درخواست‌ها...</div>
+                  ) : applications.length === 0 && !applicationsError ? (
+                    <div className="staff-state"><Store size={22} /> درخواست جدیدی وجود ندارد.</div>
+                  ) : (
+                    <div className="staff-application-list">
+                      {applications.map((application) => (
+                        <article className="staff-application-card" key={application.id}>
+                          <div className="staff-application-head">
+                            <div><span className="staff-application-id">APP / {formatAmount(application.id)}</span><h3>{application.restaurant_name}</h3></div>
+                            <span className="staff-status status-pending">در انتظار بررسی</span>
+                          </div>
+                          <div className="staff-application-details">
+                            <span>مالک: <b>{application.contact_name}</b></span>
+                            <span>نام کاربری: <b>{application.owner_username}</b></span>
+                            <span>تلفن: <b>{application.contact_phone}</b></span>
+                            <span>ایمیل: <b>{application.contact_email}</b></span>
+                            <span>شهر: <b>{application.city}</b></span>
+                            <span>نوع غذا: <b>{application.cuisine}</b></span>
+                            <span className="application-address">آدرس: <b>{application.address}</b></span>
+                          </div>
+                          {application.description && <p className="staff-application-description">{application.description}</p>}
+                          <div className="staff-application-actions">
+                            <button className="application-approve" onClick={() => reviewApplication(application.id, 'approve')} disabled={reviewingApplicationId !== null}>
+                              {reviewingApplicationId === application.id ? <LoaderCircle className="spin" size={15} /> : <ShieldCheck size={15} />}
+                              تأیید و فعال‌سازی
+                            </button>
+                            <button className="application-reject" onClick={() => reviewApplication(application.id, 'reject')} disabled={reviewingApplicationId !== null}>
+                              رد درخواست
+                            </button>
+                          </div>
+                        </article>
+                      ))}
+                    </div>
+                  )}
+                </section>
+                <section className="staff-audit-section" aria-labelledby="staff-audit-title">
                 <div className="staff-section-title">
                   <div><History size={19} /><h2 id="staff-audit-title">سوابق امنیتی</h2></div>
                   <button className="staff-ghost-button" onClick={() => setAuditRefreshKey((key) => key + 1)} disabled={auditLoading}>
@@ -370,7 +486,7 @@ export default function StaffPortal() {
                         <div className="staff-audit-meta">
                           <span>عامل: <b>{event.actor_username ?? (event.event_type === 'staff_login_failed' ? 'بدون نشست' : 'سیستم')}</b></span>
                           <span>{event.event_type === 'staff_login_failed' ? 'نام کاربری تلاش‌شده' : 'حساب هدف'}: <b>{event.subject_username ?? event.attempted_username ?? '—'}</b></span>
-                          <span>نقش: <b>{event.subject_role ? roleLabels[event.subject_role] : 'نامشخص'}</b></span>
+                          <span>نقش: <b>{event.subject_role === 'restaurant_owner' ? 'مالک رستوران' : event.subject_role ? roleLabels[event.subject_role] : 'نامشخص'}</b></span>
                           <span>شناسه رویداد: <b>{formatAmount(event.id)}</b></span>
                         </div>
                       </article>
@@ -383,7 +499,8 @@ export default function StaffPortal() {
                     {auditLoading ? 'در حال دریافت...' : 'نمایش رویدادهای قدیمی‌تر'}
                   </button>
                 )}
-              </section>
+                </section>
+              </>
             )}
           </section>
         )}

@@ -91,7 +91,7 @@ pub(crate) fn validate_password(password: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn hash_password(password: &str) -> Result<String, String> {
+pub(crate) fn hash_password(password: &str) -> Result<String, String> {
     let mut rng = OsRng;
     let salt = SaltString::generate(&mut rng);
     Argon2::default()

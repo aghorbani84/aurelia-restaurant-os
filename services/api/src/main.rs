@@ -64,6 +64,59 @@ struct RestaurantSummary {
     id: i64,
     slug: String,
     name: String,
+    city: String,
+    cuisine: String,
+    description: String,
+}
+
+#[derive(Deserialize)]
+struct RestaurantApplicationRequest {
+    restaurant_name: String,
+    owner_username: String,
+    password: String,
+    contact_name: String,
+    contact_phone: String,
+    contact_email: String,
+    city: String,
+    address: String,
+    cuisine: String,
+    description: String,
+}
+
+#[derive(Serialize)]
+struct RestaurantApplicationSubmitted {
+    application_id: i64,
+    restaurant_id: i64,
+    status: String,
+}
+
+#[derive(Serialize)]
+struct PendingRestaurantApplication {
+    id: i64,
+    restaurant_id: i64,
+    restaurant_name: String,
+    owner_username: String,
+    contact_name: String,
+    contact_phone: String,
+    contact_email: String,
+    city: String,
+    address: String,
+    cuisine: String,
+    description: String,
+    submitted_at: String,
+}
+
+#[derive(Deserialize)]
+struct ReviewRestaurantApplicationRequest {
+    decision: String,
+    note: Option<String>,
+}
+
+#[derive(Serialize)]
+struct RestaurantApplicationReview {
+    application_id: i64,
+    restaurant_id: i64,
+    status: String,
 }
 
 #[derive(Deserialize)]
@@ -171,11 +224,327 @@ async fn readiness(State(state): State<AppState>) -> Result<Json<HealthResponse>
     Ok(Json(HealthResponse { status: "ready" }))
 }
 
+fn valid_contact_phone(phone: &str) -> bool {
+    let digits = phone
+        .chars()
+        .filter(|character| character.is_ascii_digit())
+        .count();
+    (8..=15).contains(&digits)
+        && phone.chars().all(|character| {
+            character.is_ascii_digit() || matches!(character, '+' | ' ' | '-' | '(' | ')')
+        })
+}
+
+async fn submit_restaurant_application(
+    State(state): State<AppState>,
+    Json(payload): Json<RestaurantApplicationRequest>,
+) -> Result<(StatusCode, Json<RestaurantApplicationSubmitted>), ApiError> {
+    let restaurant_name = payload.restaurant_name.trim();
+    let contact_name = payload.contact_name.trim();
+    let contact_phone = payload.contact_phone.trim();
+    let contact_email = payload.contact_email.trim().to_ascii_lowercase();
+    let city = payload.city.trim();
+    let address = payload.address.trim();
+    let cuisine = payload.cuisine.trim();
+    let description = payload.description.trim();
+
+    if !(1..=160).contains(&restaurant_name.chars().count())
+        || !(1..=120).contains(&contact_name.chars().count())
+        || !valid_contact_phone(contact_phone)
+        || !(1..=80).contains(&city.chars().count())
+        || !(5..=500).contains(&address.chars().count())
+        || !(1..=100).contains(&cuisine.chars().count())
+        || description.chars().count() > 1000
+        || contact_email.len() > 254
+        || !contact_email.contains('@')
+        || contact_email.split('@').count() != 2
+    {
+        return Err(ApiError::BadRequest(
+            "restaurant application fields are invalid",
+        ));
+    }
+
+    let owner_username = auth::normalize_username(&payload.owner_username)
+        .map_err(|_| ApiError::BadRequest("owner username is invalid"))?;
+    auth::validate_password(&payload.password)
+        .map_err(|_| ApiError::BadRequest("password must contain 12-128 bytes"))?;
+    let password_hash = auth::hash_password(&payload.password).map_err(|_| ApiError::Internal)?;
+
+    let mut tx = state.db.begin().await.map_err(|_| ApiError::Internal)?;
+    let username_exists: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM staff_users WHERE username = $1)")
+            .bind(&owner_username)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(|_| ApiError::Internal)?;
+    if username_exists {
+        return Err(ApiError::Conflict("username is already taken"));
+    }
+
+    let slug = format!("restaurant-{}", Uuid::new_v4().simple());
+    let restaurant_id: i64 = sqlx::query_scalar(
+        "INSERT INTO restaurants
+            (slug, name, status, description, contact_phone, contact_email,
+             city, address, cuisine, delivery_mode)
+         VALUES ($1, $2, 'pending_review', $3, $4, $5, $6, $7, $8, 'restaurant')
+         RETURNING id",
+    )
+    .bind(slug)
+    .bind(restaurant_name)
+    .bind(description)
+    .bind(contact_phone)
+    .bind(&contact_email)
+    .bind(city)
+    .bind(address)
+    .bind(cuisine)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(|_| ApiError::Internal)?;
+
+    let owner_staff_user_id: i64 = sqlx::query_scalar(
+        "INSERT INTO staff_users (username, password_hash, role, is_active)
+         VALUES ($1, $2, 'manager', FALSE)
+         RETURNING id",
+    )
+    .bind(&owner_username)
+    .bind(password_hash)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(|_| ApiError::Conflict("username is already taken"))?;
+
+    sqlx::query(
+        "INSERT INTO restaurant_staff_memberships (restaurant_id, staff_user_id, role, is_active)
+         VALUES ($1, $2, 'restaurant_owner', FALSE)",
+    )
+    .bind(restaurant_id)
+    .bind(owner_staff_user_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(|_| ApiError::Internal)?;
+
+    let application_id: i64 = sqlx::query_scalar(
+        "INSERT INTO restaurant_applications
+            (restaurant_id, owner_staff_user_id, contact_name)
+         VALUES ($1, $2, $3)
+         RETURNING id",
+    )
+    .bind(restaurant_id)
+    .bind(owner_staff_user_id)
+    .bind(contact_name)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(|_| ApiError::Internal)?;
+
+    sqlx::query(
+        "INSERT INTO staff_audit_log
+            (event_type, actor_staff_user_id, subject_staff_user_id, subject_role, restaurant_id)
+         VALUES ('restaurant_application_submitted', $1, $1, 'restaurant_owner', $2)",
+    )
+    .bind(owner_staff_user_id)
+    .bind(restaurant_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(|_| ApiError::Internal)?;
+
+    tx.commit().await.map_err(|_| ApiError::Internal)?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(RestaurantApplicationSubmitted {
+            application_id,
+            restaurant_id,
+            status: "pending_review".to_owned(),
+        }),
+    ))
+}
+
+async fn list_pending_restaurant_applications(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<PendingRestaurantApplication>>, ApiError> {
+    let staff = auth::current_staff(&state, &headers).await?;
+    if staff.role != "owner" {
+        return Err(ApiError::Forbidden);
+    }
+
+    let rows = sqlx::query_as::<
+        _,
+        (
+            i64,
+            i64,
+            String,
+            String,
+            String,
+            String,
+            String,
+            String,
+            String,
+            String,
+            String,
+            String,
+        ),
+    >(
+        "SELECT a.id, r.id, r.name, u.username, a.contact_name, r.contact_phone,
+                r.contact_email, r.city, r.address, r.cuisine, r.description,
+                to_char(a.submitted_at, 'YYYY-MM-DD HH24:MI:SS')
+         FROM restaurant_applications a
+         INNER JOIN restaurants r ON r.id = a.restaurant_id
+         INNER JOIN staff_users u ON u.id = a.owner_staff_user_id
+         WHERE a.status = 'pending_review'
+         ORDER BY a.submitted_at ASC
+         LIMIT 200",
+    )
+    .fetch_all(&state.db)
+    .await
+    .map_err(|_| ApiError::Internal)?;
+
+    Ok(Json(
+        rows.into_iter()
+            .map(
+                |(
+                    id,
+                    restaurant_id,
+                    restaurant_name,
+                    owner_username,
+                    contact_name,
+                    contact_phone,
+                    contact_email,
+                    city,
+                    address,
+                    cuisine,
+                    description,
+                    submitted_at,
+                )| PendingRestaurantApplication {
+                    id,
+                    restaurant_id,
+                    restaurant_name,
+                    owner_username,
+                    contact_name,
+                    contact_phone,
+                    contact_email,
+                    city,
+                    address,
+                    cuisine,
+                    description,
+                    submitted_at,
+                },
+            )
+            .collect(),
+    ))
+}
+
+async fn review_restaurant_application(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(application_id): Path<i64>,
+    Json(payload): Json<ReviewRestaurantApplicationRequest>,
+) -> Result<(StatusCode, Json<RestaurantApplicationReview>), ApiError> {
+    let staff = auth::current_staff(&state, &headers).await?;
+    if staff.role != "owner" {
+        return Err(ApiError::Forbidden);
+    }
+    if application_id <= 0 || !matches!(payload.decision.as_str(), "approve" | "reject") {
+        return Err(ApiError::BadRequest(
+            "application id or decision is invalid",
+        ));
+    }
+    let note = payload.note.unwrap_or_default().trim().to_owned();
+    if note.chars().count() > 1000 {
+        return Err(ApiError::BadRequest("review note is too long"));
+    }
+
+    let approve = payload.decision == "approve";
+    let application_status = if approve { "approved" } else { "rejected" };
+    let restaurant_status = if approve { "active" } else { "rejected" };
+    let event_type = if approve {
+        "restaurant_application_approved"
+    } else {
+        "restaurant_application_rejected"
+    };
+
+    let mut tx = state.db.begin().await.map_err(|_| ApiError::Internal)?;
+    let application: Option<(i64, i64, String)> = sqlx::query_as(
+        "SELECT restaurant_id, owner_staff_user_id, status
+         FROM restaurant_applications WHERE id = $1 FOR UPDATE",
+    )
+    .bind(application_id)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(|_| ApiError::Internal)?;
+    let (restaurant_id, owner_staff_user_id, current_status) =
+        application.ok_or(ApiError::NotFound("application not found"))?;
+    if current_status != "pending_review" {
+        return Err(ApiError::Conflict("application has already been reviewed"));
+    }
+
+    sqlx::query(
+        "UPDATE restaurant_applications
+         SET status = $1, reviewed_by_staff_user_id = $2, reviewed_at = now(), review_note = $3
+         WHERE id = $4",
+    )
+    .bind(application_status)
+    .bind(staff.id)
+    .bind(note)
+    .bind(application_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(|_| ApiError::Internal)?;
+
+    sqlx::query("UPDATE restaurants SET status = $1 WHERE id = $2")
+        .bind(restaurant_status)
+        .bind(restaurant_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|_| ApiError::Internal)?;
+
+    sqlx::query("UPDATE staff_users SET is_active = $1 WHERE id = $2")
+        .bind(approve)
+        .bind(owner_staff_user_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|_| ApiError::Internal)?;
+
+    sqlx::query(
+        "UPDATE restaurant_staff_memberships SET is_active = $1
+         WHERE restaurant_id = $2 AND staff_user_id = $3 AND role = 'restaurant_owner'",
+    )
+    .bind(approve)
+    .bind(restaurant_id)
+    .bind(owner_staff_user_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(|_| ApiError::Internal)?;
+
+    sqlx::query(
+        "INSERT INTO staff_audit_log
+            (event_type, actor_staff_user_id, subject_staff_user_id, subject_role, restaurant_id)
+         VALUES ($1, $2, $3, 'restaurant_owner', $4)",
+    )
+    .bind(event_type)
+    .bind(staff.id)
+    .bind(owner_staff_user_id)
+    .bind(restaurant_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(|_| ApiError::Internal)?;
+
+    tx.commit().await.map_err(|_| ApiError::Internal)?;
+
+    Ok((
+        StatusCode::OK,
+        Json(RestaurantApplicationReview {
+            application_id,
+            restaurant_id,
+            status: application_status.to_owned(),
+        }),
+    ))
+}
+
 async fn list_restaurants(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<RestaurantSummary>>, ApiError> {
-    let rows = sqlx::query_as::<_, (i64, String, String)>(
-        "SELECT id, slug, name
+    let rows = sqlx::query_as::<_, (i64, String, String, String, String, String)>(
+        "SELECT id, slug, name, city, cuisine, description
          FROM restaurants
          WHERE status = 'active'
          ORDER BY name ASC
@@ -187,7 +556,16 @@ async fn list_restaurants(
 
     Ok(Json(
         rows.into_iter()
-            .map(|(id, slug, name)| RestaurantSummary { id, slug, name })
+            .map(
+                |(id, slug, name, city, cuisine, description)| RestaurantSummary {
+                    id,
+                    slug,
+                    name,
+                    city,
+                    cuisine,
+                    description,
+                },
+            )
             .collect(),
     ))
 }
@@ -586,12 +964,17 @@ async fn update_order_status(
     ))
 }
 
-async fn default_restaurant_id(db: &PgPool) -> Result<i64, ApiError> {
-    sqlx::query_scalar("SELECT id FROM restaurants WHERE is_default = TRUE")
-        .fetch_optional(db)
-        .await
-        .map_err(|_| ApiError::Internal)?
-        .ok_or(ApiError::Internal)
+async fn first_staff_restaurant_id(db: &PgPool, staff_user_id: i64) -> Result<i64, ApiError> {
+    sqlx::query_scalar(
+        "SELECT restaurant_id FROM restaurant_staff_memberships
+         WHERE staff_user_id = $1 AND is_active = TRUE
+         ORDER BY restaurant_id ASC LIMIT 1",
+    )
+    .bind(staff_user_id)
+    .fetch_optional(db)
+    .await
+    .map_err(|_| ApiError::Internal)?
+    .ok_or(ApiError::Forbidden)
 }
 
 async fn restaurant_staff_role(
@@ -619,7 +1002,7 @@ async fn list_admin_orders(
         return fetch_orders(&state.db, false, None).await;
     }
 
-    let restaurant_id = default_restaurant_id(&state.db).await?;
+    let restaurant_id = first_staff_restaurant_id(&state.db, staff.id).await?;
     let role = restaurant_staff_role(&state.db, staff.id, restaurant_id)
         .await?
         .ok_or(ApiError::Forbidden)?;
@@ -638,7 +1021,7 @@ async fn list_kitchen_orders(
         return fetch_orders(&state.db, true, None).await;
     }
 
-    let restaurant_id = default_restaurant_id(&state.db).await?;
+    let restaurant_id = first_staff_restaurant_id(&state.db, staff.id).await?;
     let role = restaurant_staff_role(&state.db, staff.id, restaurant_id)
         .await?
         .ok_or(ApiError::Forbidden)?;
@@ -657,7 +1040,7 @@ async fn list_service_orders(
         return fetch_orders(&state.db, true, None).await;
     }
 
-    let restaurant_id = default_restaurant_id(&state.db).await?;
+    let restaurant_id = first_staff_restaurant_id(&state.db, staff.id).await?;
     let role = restaurant_staff_role(&state.db, staff.id, restaurant_id)
         .await?
         .ok_or(ApiError::Forbidden)?;
@@ -865,6 +1248,18 @@ async fn main() {
         .route("/health", get(health))
         .route("/ready", get(readiness))
         .route("/api/restaurants", get(list_restaurants))
+        .route(
+            "/api/restaurants/apply",
+            post(submit_restaurant_application),
+        )
+        .route(
+            "/api/admin/restaurants/applications",
+            get(list_pending_restaurant_applications),
+        )
+        .route(
+            "/api/admin/restaurants/applications/:application_id/review",
+            post(review_restaurant_application),
+        )
         .route("/api/menu/categories", get(list_categories))
         .route("/api/menu/items", get(list_menu_items))
         .route("/api/orders", axum::routing::post(create_order))
@@ -906,13 +1301,196 @@ mod tests {
             .expect("apply SQLx migrations to test database");
 
         sqlx::query(
-            "TRUNCATE TABLE staff_audit_log, staff_sessions, staff_users, order_status_events, order_lines, orders, menu_items, menu_categories RESTART IDENTITY CASCADE",
+            "TRUNCATE TABLE staff_audit_log, staff_sessions, staff_users,
+             restaurant_applications, restaurant_staff_memberships,
+             order_status_events, order_lines, orders, menu_items, menu_categories,
+             restaurants RESTART IDENTITY CASCADE",
         )
         .execute(&db)
         .await
         .expect("reset dedicated test database");
 
+        sqlx::query(
+            "INSERT INTO restaurants (id, slug, name, status, is_default)
+             VALUES (1, 'legacy-default', 'AURELIA Legacy Restaurant', 'active', TRUE)",
+        )
+        .execute(&db)
+        .await
+        .expect("reseed default restaurant for tests");
+        sqlx::query("SELECT setval('restaurants_id_seq', 1, TRUE)")
+            .execute(&db)
+            .await
+            .expect("reset restaurant sequence");
+
         db
+    }
+
+    #[tokio::test]
+    async fn restaurant_application_review_activates_owner_and_tenant() {
+        let _guard = TEST_DB_LOCK.lock().await;
+        let db = test_database().await;
+        let state = AppState {
+            db: db.clone(),
+            cookie_secure: false,
+            csrf_allowed_origins: vec!["http://localhost:8088".to_owned()],
+        };
+
+        auth::bootstrap_owner(&db, "platform_owner", "platform-owner-password-strong")
+            .await
+            .expect("create platform owner");
+        let owner_headers =
+            staff_session_headers(&state, "platform_owner", "platform-owner-password-strong").await;
+
+        let (submitted_status, Json(submitted)) = submit_restaurant_application(
+            State(state.clone()),
+            Json(RestaurantApplicationRequest {
+                restaurant_name: "North Kitchen".to_owned(),
+                owner_username: "north_owner".to_owned(),
+                password: "north-owner-password-strong".to_owned(),
+                contact_name: "Restaurant Owner".to_owned(),
+                contact_phone: "+989121234567".to_owned(),
+                contact_email: "owner@example.test".to_owned(),
+                city: "Tehran".to_owned(),
+                address: "A test street, Tehran".to_owned(),
+                cuisine: "Iranian".to_owned(),
+                description: "A test application".to_owned(),
+            }),
+        )
+        .await
+        .expect("valid application should submit");
+        assert_eq!(submitted_status, StatusCode::CREATED);
+        assert_eq!(submitted.status, "pending_review");
+
+        let pending_owner_active: bool =
+            sqlx::query_scalar("SELECT is_active FROM staff_users WHERE username = 'north_owner'")
+                .fetch_one(&db)
+                .await
+                .expect("owner account should be created");
+        assert!(
+            !pending_owner_active,
+            "owner login must remain disabled until review"
+        );
+
+        let pending =
+            list_pending_restaurant_applications(State(state.clone()), owner_headers.clone())
+                .await
+                .expect("platform owner may list pending applications");
+        assert_eq!(pending.0.len(), 1);
+        assert_eq!(pending.0[0].restaurant_name, "North Kitchen");
+        assert_eq!(pending.0[0].owner_username, "north_owner");
+
+        let (review_status, Json(approved)) = review_restaurant_application(
+            State(state.clone()),
+            owner_headers.clone(),
+            Path(submitted.application_id),
+            Json(ReviewRestaurantApplicationRequest {
+                decision: "approve".to_owned(),
+                note: Some("Reviewed for test".to_owned()),
+            }),
+        )
+        .await
+        .expect("owner may approve a pending application");
+        assert_eq!(review_status, StatusCode::OK);
+        assert_eq!(approved.status, "approved");
+
+        let restaurant_status: String =
+            sqlx::query_scalar("SELECT status FROM restaurants WHERE id = $1")
+                .bind(submitted.restaurant_id)
+                .fetch_one(&db)
+                .await
+                .expect("restaurant status should be updated");
+        assert_eq!(restaurant_status, "active");
+        let membership: (String, bool) = sqlx::query_as(
+            "SELECT role, is_active FROM restaurant_staff_memberships
+             WHERE restaurant_id = $1 AND staff_user_id = (
+                SELECT id FROM staff_users WHERE username = 'north_owner'
+             )",
+        )
+        .bind(submitted.restaurant_id)
+        .fetch_one(&db)
+        .await
+        .expect("owner membership should exist");
+        assert_eq!(membership, ("restaurant_owner".to_owned(), true));
+
+        let owner_session =
+            staff_session_headers(&state, "north_owner", "north-owner-password-strong").await;
+        let tenant_item_id: i64 = sqlx::query_scalar(
+            "INSERT INTO menu_items (restaurant_id, name, price_minor, available)
+             VALUES ($1, 'North Kitchen Dish', 42000, TRUE)
+             RETURNING id",
+        )
+        .bind(submitted.restaurant_id)
+        .fetch_one(&db)
+        .await
+        .expect("insert tenant menu item");
+        let (_, Json(tenant_order)) = submit(
+            &db,
+            "Marketplace Test Customer",
+            vec![OrderItemInput {
+                menu_item_id: tenant_item_id,
+                quantity: 1,
+            }],
+        )
+        .await
+        .expect("create tenant order");
+
+        let owner_orders = list_admin_orders(State(state.clone()), owner_session)
+            .await
+            .expect("approved restaurant owner may read own order inbox");
+        let owner_orders_body = axum::body::to_bytes(owner_orders.into_body(), usize::MAX)
+            .await
+            .expect("read restaurant order inbox");
+        let owner_orders_json =
+            String::from_utf8(owner_orders_body.to_vec()).expect("response should be UTF-8");
+        assert!(owner_orders_json.contains(&tenant_order.order_number));
+
+        let (_, Json(rejected_application)) = submit_restaurant_application(
+            State(state.clone()),
+            Json(RestaurantApplicationRequest {
+                restaurant_name: "Rejected Kitchen".to_owned(),
+                owner_username: "rejected_owner".to_owned(),
+                password: "rejected-owner-password-strong".to_owned(),
+                contact_name: "Rejected Owner".to_owned(),
+                contact_phone: "09123456789".to_owned(),
+                contact_email: "rejected@example.test".to_owned(),
+                city: "Tehran".to_owned(),
+                address: "Another test street".to_owned(),
+                cuisine: "Fast food".to_owned(),
+                description: String::new(),
+            }),
+        )
+        .await
+        .expect("second valid application should submit");
+        let (_, Json(rejected)) = review_restaurant_application(
+            State(state.clone()),
+            owner_headers.clone(),
+            Path(rejected_application.application_id),
+            Json(ReviewRestaurantApplicationRequest {
+                decision: "reject".to_owned(),
+                note: Some("Unable to verify in test".to_owned()),
+            }),
+        )
+        .await
+        .expect("owner may reject an application");
+        assert_eq!(rejected.status, "rejected");
+
+        let rejected_state: (String, bool) = sqlx::query_as(
+            "SELECT r.status, u.is_active
+             FROM restaurants r
+             INNER JOIN restaurant_applications a ON a.restaurant_id = r.id
+             INNER JOIN staff_users u ON u.id = a.owner_staff_user_id
+             WHERE a.id = $1",
+        )
+        .bind(rejected_application.application_id)
+        .fetch_one(&db)
+        .await
+        .expect("read rejected application state");
+        assert_eq!(rejected_state, ("rejected".to_owned(), false));
+
+        let remaining = list_pending_restaurant_applications(State(state), owner_headers)
+            .await
+            .expect("read remaining pending applications");
+        assert!(remaining.0.is_empty());
     }
 
     #[tokio::test]

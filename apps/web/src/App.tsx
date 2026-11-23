@@ -5,7 +5,7 @@ import {
 } from 'lucide-react';
 import StaffPortal from './StaffPortal';
 
-type Restaurant = { id: number; slug: string; name: string };
+type Restaurant = { id: number; slug: string; name: string; city: string; cuisine: string; description: string };
 type MenuCategory = { id: number; restaurant_id: number; restaurant_name: string; name: string; slug: string };
 type MenuItem = {
   id: number; restaurant_id: number; restaurant_name: string; category_id: number | null;
@@ -129,7 +129,7 @@ function Storefront() {
 
   const restaurantCards = useMemo(() => restaurants.map((restaurant) => {
     const restaurantItems = items.filter((item) => item.restaurant_id === restaurant.id);
-    const cuisines = [...new Set(restaurantItems.map((item) => item.category_name).filter(Boolean))] as string[];
+    const cuisines = restaurant.cuisine ? [restaurant.cuisine] : [...new Set(restaurantItems.map((item) => item.category_name).filter(Boolean))] as string[];
     const term = search.trim().toLowerCase();
     const matches = !term || restaurant.name.toLowerCase().includes(term)
       || restaurantItems.some((item) => item.name.toLowerCase().includes(term)
@@ -233,7 +233,7 @@ function Storefront() {
           <span><strong>AURELIA</strong><small>FOOD, FAIRLY FOUND</small></span>
         </a>
         <nav className="market-nav" aria-label="ناوبری اصلی">
-          <a href="#restaurants">رستوران‌ها</a><a href="#how">چطور کار می‌کند</a><a href="/staff">ورود رستوران</a>
+          <a href="#restaurants">رستوران‌ها</a><a href="#how">چطور کار می‌کند</a><a href="/restaurant/apply">ثبت رستوران</a><a href="/staff">ورود کارکنان</a>
         </nav>
         <button className="header-cart" onClick={() => setCartOpen(true)} aria-label="باز کردن سبد">
           <ShoppingBag size={18} /><span>سبد</span><b>{formatAmount(itemCount)}</b>
@@ -283,7 +283,7 @@ function Storefront() {
               <div className="restaurant-banner">
                 <div className="restaurant-banner-art"><span>{foodEmoji(restaurantCategories[0])}</span></div>
                 <div className="restaurant-banner-copy"><span className="section-kicker">MENU / {activeRestaurant.slug.toUpperCase()}</span>
-                  <h3>{activeRestaurant.name}</h3><p>{formatAmount(restaurantItems.length)} انتخاب در منو</p>
+                  <h3>{activeRestaurant.name}</h3><p>{activeRestaurant.description || formatAmount(restaurantItems.length) + ' انتخاب در منو'}{activeRestaurant.city ? ' · ' + activeRestaurant.city : ''}</p>
                 </div>
               </div>
               <div className="menu-filter-row">
@@ -327,7 +327,7 @@ function Storefront() {
                       <span className="restaurant-count">{formatAmount(restaurant.itemCount)} آیتم</span><span className="cover-mark">{String(index + 1).padStart(2, '0')}</span>
                     </div>
                     <div className="restaurant-card-body"><h3>{restaurant.name}</h3>
-                      <p>{restaurant.cuisines.length ? restaurant.cuisines.slice(0, 3).join(' · ') : 'منوی رستوران'}</p>
+                      <p>{restaurant.cuisines.length ? restaurant.cuisines.slice(0, 3).join(' · ') : 'منوی رستوران'}{restaurant.city ? ' · ' + restaurant.city : ''}</p>
                       <div className="restaurant-card-bottom"><span>مشاهده منو</span><ArrowLeft size={16} /></div>
                     </div>
                   </button>
@@ -396,6 +396,108 @@ function Storefront() {
   );
 }
 
+function RestaurantApplicationPage() {
+  const [form, setForm] = useState({
+    restaurant_name: '',
+    owner_username: '',
+    password: '',
+    contact_name: '',
+    contact_phone: '',
+    contact_email: '',
+    city: '',
+    address: '',
+    cuisine: '',
+    description: '',
+  });
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState('');
+  const [application, setApplication] = useState<{ application_id: number; restaurant_id: number; status: string } | null>(null);
+
+  const update = (field: keyof typeof form, value: string) => setForm((current) => ({ ...current, [field]: value }));
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setError('');
+    setSubmitting(true);
+    try {
+      const response = await fetch('/api/restaurants/apply', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(form),
+      });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.error || 'ارسال درخواست انجام نشد.');
+      setApplication(body);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'ارتباط با سرور برقرار نشد.');
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div dir="rtl" className="market-shell apply-shell">
+      <header className="market-header">
+        <a className="market-brand" href="/" aria-label="بازگشت به Aurelia">
+          <span className="brand-mark"><UtensilsCrossed size={19} /></span>
+          <span><strong>AURELIA</strong><small>FOOD, FAIRLY FOUND</small></span>
+        </a>
+        <a className="staff-back-link" href="/">بازگشت به بازار غذا</a>
+      </header>
+      <main className="restaurant-apply-page">
+        <div className="apply-intro">
+          <span className="hero-kicker"><span className="kicker-dot" /> همراه رستوران‌های مستقل</span>
+          <h1>رستوران شما،<br /><em>در مسیر رشد.</em></h1>
+          <p>اطلاعات اولیه را ثبت کنید. درخواست شما به‌صورت دستی بررسی می‌شود؛ هیچ هزینه یا تبلیغ اجباری برای ثبت درخواست وجود ندارد.</p>
+          <div className="apply-benefits">
+            <span><Check size={15} /> شرایط شفاف</span>
+            <span><Check size={15} /> تبلیغ اجباری ندارد</span>
+            <span><Check size={15} /> بررسی انسانی</span>
+          </div>
+        </div>
+        <section className="apply-form-card">
+          {application ? (
+            <div className="apply-success">
+              <span className="confirmation-check"><Check size={24} /></span>
+              <h2>درخواست شما ثبت شد</h2>
+              <p>شماره درخواست</p><strong className="order-number">APP-{formatAmount(application.application_id)}</strong>
+              <p className="apply-success-note">حساب مالک تا تأیید درخواست غیرفعال است. پس از بررسی، حساب و رستوران فعال می‌شوند. در این نسخه، تأیید تماس و مدارک به‌صورت دستی انجام می‌شود.</p>
+              <a className="checkout-submit" href="/">بازگشت به بازار غذا</a>
+            </div>
+          ) : (
+            <>
+              <div className="apply-card-heading"><span className="section-kicker">RESTAURANT APPLICATION</span><h2>فرم ثبت رستوران</h2><p>همه فیلدهای ستاره‌دار ضروری هستند.</p></div>
+              <form className="restaurant-apply-form" onSubmit={submit}>
+                <div className="apply-fields-grid">
+                  <label>نام رستوران *<input value={form.restaurant_name} onChange={(event) => update('restaurant_name', event.target.value)} maxLength={160} required /></label>
+                  <label>نام مسئول *<input value={form.contact_name} onChange={(event) => update('contact_name', event.target.value)} maxLength={120} required /></label>
+                  <label>نام کاربری مالک *<input value={form.owner_username} onChange={(event) => update('owner_username', event.target.value.toLowerCase())} minLength={3} maxLength={32} pattern="[a-z0-9._-]+" autoComplete="username" required /><small>۳ تا ۳۲ حرف انگلیسی کوچک، عدد، نقطه، خط یا زیرخط</small></label>
+                  <label>گذرواژه *<input type="password" value={form.password} onChange={(event) => update('password', event.target.value)} minLength={12} maxLength={128} autoComplete="new-password" required /><small>حداقل ۱۲ کاراکتر</small></label>
+                  <label>شماره تماس *<input value={form.contact_phone} onChange={(event) => update('contact_phone', event.target.value)} inputMode="tel" maxLength={24} required /></label>
+                  <label>ایمیل *<input type="email" value={form.contact_email} onChange={(event) => update('contact_email', event.target.value)} maxLength={254} required /></label>
+                  <label>شهر *<input value={form.city} onChange={(event) => update('city', event.target.value)} maxLength={80} required /></label>
+                  <label>نوع غذا *<input value={form.cuisine} onChange={(event) => update('cuisine', event.target.value)} maxLength={100} placeholder="مثلاً ایرانی، برگر، پیتزا" required /></label>
+                  <label className="apply-address">آدرس کامل *<textarea value={form.address} onChange={(event) => update('address', event.target.value)} minLength={5} maxLength={500} rows={3} required /></label>
+                  <label className="apply-description">توضیح کوتاه<textarea value={form.description} onChange={(event) => update('description', event.target.value)} maxLength={1000} rows={3} placeholder="درباره رستوران و سبک غذا..." /></label>
+                </div>
+                {error && <p className="form-error" role="alert">{error}</p>}
+                <p className="apply-terms">با ارسال درخواست، موافق بررسی اطلاعات توسط تیم AURELIA هستید. حساب مالک و نمایش عمومی رستوران پس از تأیید فعال می‌شود.</p>
+                <button className="checkout-submit" type="submit" disabled={submitting}>
+                  {submitting ? <LoaderCircle className="spin" /> : <Store size={18} />}
+                  {submitting ? 'در حال ارسال...' : 'ارسال برای بررسی'}
+                </button>
+              </form>
+            </>
+          )}
+        </section>
+      </main>
+      <footer className="market-footer"><a className="market-brand" href="/"><span className="brand-mark"><UtensilsCrossed size={18} /></span><span><strong>AURELIA</strong><small>FOOD, FAIRLY FOUND</small></span></a><p>بازار غذا؛ منصفانه‌تر برای رستوران، ساده‌تر برای مشتری.</p></footer>
+    </div>
+  );
+}
+
 export default function App() {
-  return window.location.pathname === '/staff' ? <StaffPortal /> : <Storefront />;
+  if (window.location.pathname === '/staff') return <StaffPortal />;
+  if (window.location.pathname === '/restaurant/apply') return <RestaurantApplicationPage />;
+  return <Storefront />;
 }
