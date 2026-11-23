@@ -1021,7 +1021,7 @@ async fn list_kitchen_orders(
         return fetch_orders(&state.db, true, None).await;
     }
 
-    let restaurant_id = default_restaurant_id(&state.db).await?;
+    let restaurant_id = first_staff_restaurant_id(&state.db, staff.id).await?;
     let role = restaurant_staff_role(&state.db, staff.id, restaurant_id)
         .await?
         .ok_or(ApiError::Forbidden)?;
@@ -1040,7 +1040,7 @@ async fn list_service_orders(
         return fetch_orders(&state.db, true, None).await;
     }
 
-    let restaurant_id = default_restaurant_id(&state.db).await?;
+    let restaurant_id = first_staff_restaurant_id(&state.db, staff.id).await?;
     let role = restaurant_staff_role(&state.db, staff.id, restaurant_id)
         .await?
         .ok_or(ApiError::Forbidden)?;
