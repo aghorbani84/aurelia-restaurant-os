@@ -1686,6 +1686,35 @@ mod tests {
         .await
         .expect("create second order");
 
+        let other_restaurant_id: i64 = sqlx::query_scalar(
+            "INSERT INTO restaurants (slug, name, status)
+             VALUES ($1, 'Tenant Two', 'active')
+             RETURNING id",
+        )
+        .bind(format!("status-test-{}", Uuid::new_v4().simple()))
+        .fetch_one(&db)
+        .await
+        .expect("create tenant two");
+        let other_item_id: i64 = sqlx::query_scalar(
+            "INSERT INTO menu_items (restaurant_id, name, price_minor, available)
+             VALUES ($1, 'Tenant Two Item', 2000, TRUE)
+             RETURNING id",
+        )
+        .bind(other_restaurant_id)
+        .fetch_one(&db)
+        .await
+        .expect("create tenant two menu item");
+        let (_, Json(other_order)) = submit(
+            &db,
+            "Tenant Two Customer",
+            vec![OrderItemInput {
+                menu_item_id: other_item_id,
+                quantity: 1,
+            }],
+        )
+        .await
+        .expect("create tenant two order");
+
         let state = AppState {
             db: db.clone(),
             cookie_secure: false,
@@ -1694,6 +1723,41 @@ mod tests {
         let owner_headers = staff_session_headers(&state, "owner_01", owner_password).await;
         let chef_headers = staff_session_headers(&state, "chef_01", chef_password).await;
         let waiter_headers = staff_session_headers(&state, "waiter_01", waiter_password).await;
+
+        assert!(matches!(
+            update_order_status(
+                State(state.clone()),
+                chef_headers.clone(),
+                Path(other_order.id),
+                Json(UpdateOrderStatusRequest {
+                    status: "accepted".to_owned(),
+                }),
+            )
+            .await,
+            Err(ApiError::Forbidden)
+        ));
+
+        let (_, _, Json(tenant_two_accepted)) = update_order_status(
+            State(state.clone()),
+            owner_headers.clone(),
+            Path(other_order.id),
+            Json(UpdateOrderStatusRequest {
+                status: "accepted".to_owned(),
+            }),
+        )
+        .await
+        .expect("platform owner may update an order across tenants");
+        assert_eq!(tenant_two_accepted.status, "accepted");
+
+        let kitchen_response = list_kitchen_orders(State(state.clone()), chef_headers.clone())
+            .await
+            .expect("chef may read their restaurant orders");
+        let kitchen_body = axum::body::to_bytes(kitchen_response.into_body(), usize::MAX)
+            .await
+            .expect("read kitchen response");
+        let kitchen_json = String::from_utf8(kitchen_body.to_vec()).expect("UTF-8 JSON response");
+        assert!(kitchen_json.contains(&first_order.order_number));
+        assert!(!kitchen_json.contains(&other_order.order_number));
 
         let mut missing_origin = owner_headers.clone();
         missing_origin.remove(header::ORIGIN);
@@ -1807,6 +1871,7 @@ mod tests {
         assert_eq!(
             events,
             vec![
+                (other_order.id, "pending".to_owned(), "accepted".to_owned()),
                 (first_order.id, "pending".to_owned(), "accepted".to_owned()),
                 (
                     first_order.id,
