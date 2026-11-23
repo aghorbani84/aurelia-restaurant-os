@@ -1528,5 +1528,4 @@ mod tests {
         assert!(!valid_order_transition("completed", "preparing"));
         assert!(!valid_order_transition("pending", "pending"));
     }
-
 }
