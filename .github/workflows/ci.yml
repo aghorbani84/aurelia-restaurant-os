@@ -13,6 +13,13 @@ jobs:
         with:
           node-version: 22
       - run: cd apps/web && npm install && npm run build
+      - name: Upload generated npm lockfile (temporary bootstrap)
+        uses: actions/upload-artifact@v4
+        with:
+          name: aurelia-web-lockfile
+          path: apps/web/package-lock.json
+          if-no-files-found: error
+          retention-days: 1
 
   rust:
     runs-on: ubuntu-latest
