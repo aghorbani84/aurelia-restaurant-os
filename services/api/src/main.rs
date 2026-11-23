@@ -216,13 +216,15 @@ async fn list_categories(
 
     Ok(Json(
         rows.into_iter()
-            .map(|(id, restaurant_id, restaurant_name, name, slug)| MenuCategory {
-                id,
-                restaurant_id,
-                restaurant_name,
-                name,
-                slug,
-            })
+            .map(
+                |(id, restaurant_id, restaurant_name, name, slug)| MenuCategory {
+                    id,
+                    restaurant_id,
+                    restaurant_name,
+                    name,
+                    slug,
+                },
+            )
             .collect(),
     ))
 }
@@ -237,7 +239,17 @@ async fn list_menu_items(
 
     let rows = sqlx::query_as::<
         _,
-        (i64, i64, String, Option<i64>, Option<String>, String, String, i64, bool),
+        (
+            i64,
+            i64,
+            String,
+            Option<i64>,
+            Option<String>,
+            String,
+            String,
+            i64,
+            bool,
+        ),
     >(
         "SELECT mi.id, mi.restaurant_id, r.name, mi.category_id, mc.name,
                 mi.name, mi.description, mi.price_minor, mi.available
