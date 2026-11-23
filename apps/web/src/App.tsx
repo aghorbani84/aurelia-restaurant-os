@@ -29,7 +29,7 @@ const loadCart = (): Record<number, number> => {
   }
 };
 
-const foodEmoji = (category = '') => {
+const foodEmoji = (category: string | null = '') => {
   const value = category.toLowerCase();
   if (value.includes('پیتزا') || value.includes('pizza')) return '🍕';
   if (value.includes('برگر') || value.includes('burger')) return '🍔';
