@@ -64,6 +64,59 @@ struct RestaurantSummary {
     id: i64,
     slug: String,
     name: String,
+    city: String,
+    cuisine: String,
+    description: String,
+}
+
+#[derive(Deserialize)]
+struct RestaurantApplicationRequest {
+    restaurant_name: String,
+    owner_username: String,
+    password: String,
+    contact_name: String,
+    contact_phone: String,
+    contact_email: String,
+    city: String,
+    address: String,
+    cuisine: String,
+    description: String,
+}
+
+#[derive(Serialize)]
+struct RestaurantApplicationSubmitted {
+    application_id: i64,
+    restaurant_id: i64,
+    status: String,
+}
+
+#[derive(Serialize)]
+struct PendingRestaurantApplication {
+    id: i64,
+    restaurant_id: i64,
+    restaurant_name: String,
+    owner_username: String,
+    contact_name: String,
+    contact_phone: String,
+    contact_email: String,
+    city: String,
+    address: String,
+    cuisine: String,
+    description: String,
+    submitted_at: String,
+}
+
+#[derive(Deserialize)]
+struct ReviewRestaurantApplicationRequest {
+    decision: String,
+    note: Option<String>,
+}
+
+#[derive(Serialize)]
+struct RestaurantApplicationReview {
+    application_id: i64,
+    restaurant_id: i64,
+    status: String,
 }
 
 #[derive(Deserialize)]
@@ -174,8 +227,8 @@ async fn readiness(State(state): State<AppState>) -> Result<Json<HealthResponse>
 async fn list_restaurants(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<RestaurantSummary>>, ApiError> {
-    let rows = sqlx::query_as::<_, (i64, String, String)>(
-        "SELECT id, slug, name
+    let rows = sqlx::query_as::<_, (i64, String, String, String, String, String)>(
+        "SELECT id, slug, name, city, cuisine, description
          FROM restaurants
          WHERE status = 'active'
          ORDER BY name ASC
@@ -187,7 +240,14 @@ async fn list_restaurants(
 
     Ok(Json(
         rows.into_iter()
-            .map(|(id, slug, name)| RestaurantSummary { id, slug, name })
+            .map(|(id, slug, name, city, cuisine, description)| RestaurantSummary {
+                id,
+                slug,
+                name,
+                city,
+                cuisine,
+                description,
+            })
             .collect(),
     ))
 }
