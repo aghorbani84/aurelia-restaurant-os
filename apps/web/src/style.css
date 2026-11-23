@@ -230,3 +230,63 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid 
   html { scroll-behavior: auto; }
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
+
+/* Restaurant application */
+.apply-shell { min-height: 100vh; }
+.restaurant-apply-page { display: grid; grid-template-columns: .85fr 1.15fr; gap: clamp(24px, 5vw, 70px); align-items: start; padding: 65px clamp(20px, 7vw, 100px) 85px; background: #f0e9dc; }
+.apply-intro { position: sticky; top: 115px; padding-top: 25px; }
+.apply-intro h1 { margin: 20px 0; font-size: clamp(40px, 5vw, 65px); font-weight: 400; line-height: 1.4; }
+.apply-intro h1 em { font-style: normal; color: var(--accent); }
+.apply-intro>p { color: var(--muted); font-size: 12px; line-height: 2.2; max-width: 390px; }
+.apply-benefits { display: grid; gap: 13px; margin-top: 25px; color: var(--ink-soft); font-size: 11px; }
+.apply-benefits span { display: flex; align-items: center; gap: 8px; }
+.apply-benefits svg { color: var(--olive); }
+.apply-form-card { padding: clamp(22px, 3vw, 35px); border: 1px solid #ded5c5; border-radius: 22px; background: var(--white); box-shadow: 0 20px 45px #44331b0a; }
+.apply-card-heading { padding-bottom: 20px; border-bottom: 1px solid var(--line); margin-bottom: 20px; }
+.apply-card-heading h2 { font-size: 23px; font-weight: 500; margin: 10px 0 5px; }
+.apply-card-heading p { font-size: 10px; color: var(--muted); margin: 0; }
+.restaurant-apply-form { display: grid; gap: 17px; }
+.apply-fields-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.apply-fields-grid label { display: grid; gap: 7px; font-size: 11px; color: var(--ink-soft); }
+.apply-fields-grid input, .apply-fields-grid textarea { width: 100%; min-width: 0; border: 1px solid #ddd5c7; border-radius: 10px; background: #fffefa; padding: 11px 12px; font-size: 12px; color: var(--ink); outline: none; }
+.apply-fields-grid input:focus, .apply-fields-grid textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px #bd6f3615; }
+.apply-fields-grid small { font-size: 9px; color: var(--muted); line-height: 1.7; }
+.apply-address, .apply-description { grid-column: 1 / -1; }
+.apply-fields-grid textarea { resize: vertical; }
+.apply-terms { color: var(--muted); font-size: 10px; line-height: 2; margin: 0; }
+.apply-success { text-align: center; padding: 20px 5px; }
+.apply-success h2 { font-size: 22px; font-weight: 500; }
+.apply-success-note { color: var(--muted); font-size: 11px; line-height: 2.1; max-width: 380px; margin: 20px auto; }
+.apply-success .checkout-submit { display: flex; width: 100%; justify-content: center; }
+
+/* Platform owner: restaurant application review */
+.staff-applications-section { margin: 35px 0; padding: 22px; border: 1px solid #d9d5cb; border-radius: 18px; background: #fbfaf6; }
+.staff-application-list { display: grid; gap: 13px; }
+.staff-application-card { padding: 18px; border: 1px solid #e0dbd1; border-radius: 15px; background: #fff; }
+.staff-application-head { display: flex; align-items: start; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+.staff-application-head h3 { margin: 5px 0 0; font-size: 16px; font-weight: 500; }
+.staff-application-id { color: var(--muted); font: 9px 'DM Sans', sans-serif; letter-spacing: 1px; }
+.staff-application-details { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px 15px; color: var(--muted); font-size: 10px; }
+.staff-application-details b { color: var(--ink-soft); font-weight: 500; }
+.application-address { grid-column: 1 / -1; }
+.staff-application-description { color: var(--muted); font-size: 10px; line-height: 1.9; margin: 13px 0 0; }
+.staff-application-actions { display: flex; gap: 9px; margin-top: 16px; }
+.staff-application-actions button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; border-radius: 9px; padding: 10px 14px; font-size: 10px; }
+.application-approve { border: 0; background: #42553a; color: white; }
+.application-reject { border: 1px solid #d7c8c3; background: transparent; color: #98534b; }
+@media (max-width: 850px) {
+  .restaurant-apply-page { grid-template-columns: 1fr; padding: 40px 20px 60px; }
+  .apply-intro { position: static; padding-top: 0; }
+  .apply-intro h1 { font-size: 44px; margin: 13px 0; }
+  .apply-intro>p { max-width: none; }
+  .apply-benefits { display: flex; flex-wrap: wrap; gap: 14px; margin: 18px 0; }
+}
+@media (max-width: 560px) {
+  .apply-form-card { padding: 20px 16px; }
+  .apply-fields-grid { grid-template-columns: 1fr; gap: 12px; }
+  .apply-address, .apply-description { grid-column: auto; }
+  .staff-applications-section { padding: 15px; margin: 24px 0; }
+  .staff-application-details { grid-template-columns: 1fr; }
+  .application-address { grid-column: auto; }
+  .staff-application-actions { flex-direction: column; }
+}
