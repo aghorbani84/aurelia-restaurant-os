@@ -486,7 +486,7 @@ export default function StaffPortal() {
                         <div className="staff-audit-meta">
                           <span>عامل: <b>{event.actor_username ?? (event.event_type === 'staff_login_failed' ? 'بدون نشست' : 'سیستم')}</b></span>
                           <span>{event.event_type === 'staff_login_failed' ? 'نام کاربری تلاش‌شده' : 'حساب هدف'}: <b>{event.subject_username ?? event.attempted_username ?? '—'}</b></span>
-                          <span>نقش: <b>{event.subject_role ? roleLabels[event.subject_role] : 'نامشخص'}</b></span>
+                          <span>نقش: <b>{event.subject_role === 'restaurant_owner' ? 'مالک رستوران' : event.subject_role ? roleLabels[event.subject_role] : 'نامشخص'}</b></span>
                           <span>شناسه رویداد: <b>{formatAmount(event.id)}</b></span>
                         </div>
                       </article>
