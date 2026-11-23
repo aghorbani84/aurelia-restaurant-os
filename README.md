@@ -20,7 +20,7 @@ export POSTGRES_PASSWORD='change-this-local-dev-password'
 export CORS_ALLOWED_ORIGINS='https://app.example.com,https://admin.example.com'
 # Secure cookies are enabled by default. Disable only for local plain-HTTP testing.
 export COOKIE_SECURE=true
-# Exact browser origins allowed to submit staff login/logout requests.
+# Exact browser origins allowed to submit staff login/logout and order status mutation requests.
 export CSRF_ALLOWED_ORIGINS='http://localhost:5173,http://localhost:8088'
 docker compose up --build
 ```
