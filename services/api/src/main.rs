@@ -1534,11 +1534,15 @@ mod tests {
                 .fetch_one(&db)
                 .await
                 .expect("owner account should be created");
-        assert!(!pending_owner_active, "owner login must remain disabled until review");
+        assert!(
+            !pending_owner_active,
+            "owner login must remain disabled until review"
+        );
 
-        let pending = list_pending_restaurant_applications(State(state.clone()), owner_headers.clone())
-            .await
-            .expect("platform owner may list pending applications");
+        let pending =
+            list_pending_restaurant_applications(State(state.clone()), owner_headers.clone())
+                .await
+                .expect("platform owner may list pending applications");
         assert_eq!(pending.0.len(), 1);
         assert_eq!(pending.0[0].restaurant_name, "North Kitchen");
         assert_eq!(pending.0[0].owner_username, "north_owner");
