@@ -1226,6 +1226,15 @@ async fn main() {
         .route("/health", get(health))
         .route("/ready", get(readiness))
         .route("/api/restaurants", get(list_restaurants))
+        .route("/api/restaurants/apply", post(submit_restaurant_application))
+        .route(
+            "/api/admin/restaurants/applications",
+            get(list_pending_restaurant_applications),
+        )
+        .route(
+            "/api/admin/restaurants/applications/:application_id/review",
+            post(review_restaurant_application),
+        )
         .route("/api/menu/categories", get(list_categories))
         .route("/api/menu/items", get(list_menu_items))
         .route("/api/orders", axum::routing::post(create_order))
