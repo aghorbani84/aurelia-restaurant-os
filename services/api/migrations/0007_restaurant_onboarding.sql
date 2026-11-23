@@ -45,6 +45,7 @@ ALTER TABLE staff_audit_log
             'owner_bootstrapped',
             'staff_provisioned_cli',
             'staff_login_succeeded',
+            'staff_login_failed',
             'staff_logout',
             'restaurant_application_submitted',
             'restaurant_application_approved',
