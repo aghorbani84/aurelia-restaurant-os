@@ -4,7 +4,7 @@ use axum::{
     extract::{Path, Query, State},
     http::{header, HeaderMap, HeaderValue, Method, StatusCode},
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::{delete, get, patch, post, put},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
@@ -1719,6 +1719,26 @@ async fn main() {
         )
         .route("/api/menu/categories", get(list_categories))
         .route("/api/menu/items", get(list_menu_items))
+        .route(
+            "/api/restaurant/menu/categories",
+            get(list_restaurant_menu_categories).post(create_restaurant_menu_category),
+        )
+        .route(
+            "/api/restaurant/menu/categories/:category_id",
+            delete(delete_restaurant_menu_category),
+        )
+        .route(
+            "/api/restaurant/menu/items",
+            get(list_restaurant_menu_items).post(create_restaurant_menu_item),
+        )
+        .route(
+            "/api/restaurant/menu/items/:item_id",
+            put(update_restaurant_menu_item).delete(delete_restaurant_menu_item),
+        )
+        .route(
+            "/api/restaurant/menu/items/:item_id/availability",
+            patch(set_restaurant_menu_item_availability),
+        )
         .route("/api/orders", axum::routing::post(create_order))
         .route("/api/orders/:order_id/status", post(update_order_status))
         .route("/api/admin/orders", get(list_admin_orders))
