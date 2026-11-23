@@ -1483,4 +1483,22 @@ mod tests {
     }
 
 
+    #[test]
+    fn order_status_transition_roles_are_restricted() {
+        assert!(role_can_update_order_status("owner", "preparing", "cancelled"));
+        assert!(role_can_update_order_status("manager", "ready", "completed"));
+        assert!(role_can_update_order_status("chef", "pending", "accepted"));
+        assert!(role_can_update_order_status("chef", "accepted", "preparing"));
+        assert!(role_can_update_order_status("chef", "preparing", "ready"));
+        assert!(role_can_update_order_status("waiter", "ready", "completed"));
+        assert!(role_can_update_order_status("cashier", "accepted", "cancelled"));
+
+        assert!(!role_can_update_order_status("chef", "pending", "cancelled"));
+        assert!(!role_can_update_order_status("cashier", "ready", "completed"));
+        assert!(!role_can_update_order_status("waiter", "preparing", "ready"));
+        assert!(!valid_order_transition("completed", "preparing"));
+        assert!(!valid_order_transition("pending", "pending"));
+    }
+
+
 }
