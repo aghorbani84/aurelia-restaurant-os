@@ -727,6 +727,111 @@ mod tests {
         db
     }
 
+    #[tokio::test]
+    async fn marketplace_tenant_schema_scopes_legacy_rows_and_rejects_cross_tenant_links() {
+        let _guard = TEST_DB_LOCK.lock().await;
+        let db = test_database().await;
+
+        let default_restaurant: (i64, String, bool) = sqlx::query_as(
+            "SELECT id, slug, is_default FROM restaurants WHERE is_default = TRUE",
+        )
+        .fetch_one(&db)
+        .await
+        .expect("migration should seed a default legacy restaurant");
+        assert_eq!(default_restaurant, (1, "legacy-default".to_owned(), true));
+
+        let other_slug = format!("tenant-test-{}", Uuid::new_v4().simple());
+        let other_restaurant_id: i64 = sqlx::query_scalar(
+            "INSERT INTO restaurants (slug, name, status)
+             VALUES ($1, 'Tenant Test Restaurant', 'active')
+             RETURNING id",
+        )
+        .bind(other_slug)
+        .fetch_one(&db)
+        .await
+        .expect("create a second tenant");
+
+        let default_category_id: i64 = sqlx::query_scalar(
+            "INSERT INTO menu_categories (name, slug)
+             VALUES ('Legacy Category', 'legacy-category')
+             RETURNING id",
+        )
+        .fetch_one(&db)
+        .await
+        .expect("legacy category should default to tenant 1");
+
+        let default_item_id: i64 = sqlx::query_scalar(
+            "INSERT INTO menu_items (name, price_minor, available)
+             VALUES ('Legacy Item', 1000, TRUE)
+             RETURNING id",
+        )
+        .fetch_one(&db)
+        .await
+        .expect("legacy menu item should default to tenant 1");
+
+        let second_item_id: i64 = sqlx::query_scalar(
+            "INSERT INTO menu_items (restaurant_id, name, price_minor, available)
+             VALUES ($1, 'Second Tenant Item', 2000, TRUE)
+             RETURNING id",
+        )
+        .bind(other_restaurant_id)
+        .fetch_one(&db)
+        .await
+        .expect("create a menu item for tenant 2");
+
+        let legacy_order_id: i64 = sqlx::query_scalar(
+            "INSERT INTO orders (order_number, customer_name, total_minor)
+             VALUES ('TENANT-TEST-LEGACY', 'Test Customer', 1000)
+             RETURNING id",
+        )
+        .fetch_one(&db)
+        .await
+        .expect("legacy order should default to tenant 1");
+
+        let item_tenant: i64 = sqlx::query_scalar(
+            "SELECT restaurant_id FROM menu_items WHERE id = $1",
+        )
+        .bind(default_item_id)
+        .fetch_one(&db)
+        .await
+        .expect("read tenant assignment");
+        let order_tenant: i64 = sqlx::query_scalar(
+            "SELECT restaurant_id FROM orders WHERE id = $1",
+        )
+        .bind(legacy_order_id)
+        .fetch_one(&db)
+        .await
+        .expect("read order tenant assignment");
+        assert_eq!(item_tenant, 1);
+        assert_eq!(order_tenant, 1);
+
+        let cross_tenant_order_line = sqlx::query(
+            "INSERT INTO order_lines (restaurant_id, order_id, menu_item_id, quantity, unit_price_minor)
+             VALUES (1, $1, $2, 1, 2000)",
+        )
+        .bind(legacy_order_id)
+        .bind(second_item_id)
+        .execute(&db)
+        .await;
+        assert!(
+            cross_tenant_order_line.is_err(),
+            "database must reject order lines that reference another tenant's item"
+        );
+
+        let cross_tenant_category = sqlx::query(
+            "INSERT INTO menu_items (restaurant_id, category_id, name, price_minor, available)
+             VALUES ($1, $2, 'Invalid cross-tenant category', 100, TRUE)",
+        )
+        .bind(other_restaurant_id)
+        .bind(default_category_id)
+        .execute(&db)
+        .await;
+        assert!(
+            cross_tenant_category.is_err(),
+            "database must reject menu items that reference another tenant's category"
+        );
+    }
+
     fn test_origin_headers() -> HeaderMap {
         let mut headers = HeaderMap::new();
         headers.insert(
