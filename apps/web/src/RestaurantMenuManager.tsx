@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useState } from 'react';
-import { ChefHat, LoaderCircle, Minus, Plus, RefreshCw, Save, Trash2 } from 'lucide-react';
+import { ChefHat, LoaderCircle, Plus, RefreshCw, Save, Trash2 } from 'lucide-react';
 
 type MenuCategory = { id: number; restaurant_id: number; restaurant_name: string; name: string; slug: string };
 type MenuItem = {
