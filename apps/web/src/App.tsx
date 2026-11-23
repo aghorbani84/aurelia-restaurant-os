@@ -91,6 +91,21 @@ function Storefront() {
     try { localStorage.setItem('aurelia-market-cart-v1', JSON.stringify(cart)); } catch { /* storage is optional */ }
   }, [cart]);
 
+  useEffect(() => {
+    if (loading || items.length === 0) return;
+    setCart((current) => {
+      const valid = Object.entries(current).filter(([id, quantity]) =>
+        items.some((item) => item.id === Number(id) && quantity > 0),
+      );
+      const firstTenant = valid.length ? items.find((item) => item.id === Number(valid[0][0]))?.restaurant_id : null;
+      const safe = Object.fromEntries(valid.filter(([id]) =>
+        items.find((item) => item.id === Number(id))?.restaurant_id === firstTenant,
+      ));
+      if (Object.keys(safe).length === Object.keys(current).length) return current;
+      return safe;
+    });
+  }, [items, loading]);
+
   const activeRestaurant = restaurants.find((restaurant) => restaurant.id === activeRestaurantId) ?? null;
   const cartLines = useMemo<CartLine[]>(
     () => items.filter((item) => cart[item.id] > 0).map((item) => ({ ...item, quantity: cart[item.id] })),
