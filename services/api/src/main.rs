@@ -460,7 +460,7 @@ fn valid_order_transition(from: &str, to: &str) -> bool {
 }
 
 fn role_can_update_order_status(role: &str, from: &str, to: &str) -> bool {
-    if matches!(role, "owner" | "manager") {
+    if matches!(role, "owner" | "restaurant_owner" | "manager") {
         return valid_order_transition(from, to);
     }
 
@@ -500,18 +500,33 @@ async fn update_order_status(
     }
 
     let mut tx = state.db.begin().await.map_err(|_| ApiError::Internal)?;
-    let current_status: Option<String> =
-        sqlx::query_scalar("SELECT status FROM orders WHERE id = $1 FOR UPDATE")
+    let order: Option<(String, i64)> =
+        sqlx::query_as("SELECT status, restaurant_id FROM orders WHERE id = $1 FOR UPDATE")
             .bind(order_id)
             .fetch_optional(&mut *tx)
             .await
             .map_err(|_| ApiError::Internal)?;
-    let current_status = current_status.ok_or(ApiError::NotFound("order not found"))?;
+    let (current_status, restaurant_id) = order.ok_or(ApiError::NotFound("order not found"))?;
+
+    let restaurant_role = if staff.role == "owner" {
+        "owner".to_owned()
+    } else {
+        sqlx::query_scalar::<_, String>(
+            "SELECT role FROM restaurant_staff_memberships
+             WHERE staff_user_id = $1 AND restaurant_id = $2 AND is_active = TRUE",
+        )
+        .bind(staff.id)
+        .bind(restaurant_id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|_| ApiError::Internal)?
+        .ok_or(ApiError::Forbidden)?
+    };
 
     if !valid_order_transition(&current_status, &payload.status) {
         return Err(ApiError::Conflict("invalid order status transition"));
     }
-    if !role_can_update_order_status(&staff.role, &current_status, &payload.status) {
+    if !role_can_update_order_status(&restaurant_role, &current_status, &payload.status) {
         return Err(ApiError::Forbidden);
     }
 
@@ -553,15 +568,47 @@ async fn update_order_status(
     ))
 }
 
+async fn default_restaurant_id(db: &PgPool) -> Result<i64, ApiError> {
+    sqlx::query_scalar("SELECT id FROM restaurants WHERE is_default = TRUE")
+        .fetch_optional(db)
+        .await
+        .map_err(|_| ApiError::Internal)?
+        .ok_or(ApiError::Internal)
+}
+
+async fn restaurant_staff_role(
+    db: &PgPool,
+    staff_user_id: i64,
+    restaurant_id: i64,
+) -> Result<Option<String>, ApiError> {
+    sqlx::query_scalar(
+        "SELECT role FROM restaurant_staff_memberships
+         WHERE staff_user_id = $1 AND restaurant_id = $2 AND is_active = TRUE",
+    )
+    .bind(staff_user_id)
+    .bind(restaurant_id)
+    .fetch_optional(db)
+    .await
+    .map_err(|_| ApiError::Internal)
+}
+
 async fn list_admin_orders(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     let staff = auth::current_staff(&state, &headers).await?;
-    if !auth::can_view_admin_orders(&staff.role) {
+    if staff.role == "owner" {
+        return fetch_orders(&state.db, false, None).await;
+    }
+
+    let restaurant_id = default_restaurant_id(&state.db).await?;
+    let role = restaurant_staff_role(&state.db, staff.id, restaurant_id)
+        .await?
+        .ok_or(ApiError::Forbidden)?;
+    if !matches!(role.as_str(), "restaurant_owner" | "manager" | "cashier") {
         return Err(ApiError::Forbidden);
     }
-    fetch_orders(&state.db, false).await
+    fetch_orders(&state.db, false, Some(restaurant_id)).await
 }
 
 async fn list_kitchen_orders(
@@ -569,10 +616,18 @@ async fn list_kitchen_orders(
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     let staff = auth::current_staff(&state, &headers).await?;
-    if !auth::can_view_kitchen_orders(&staff.role) {
+    if staff.role == "owner" {
+        return fetch_orders(&state.db, true, None).await;
+    }
+
+    let restaurant_id = default_restaurant_id(&state.db).await?;
+    let role = restaurant_staff_role(&state.db, staff.id, restaurant_id)
+        .await?
+        .ok_or(ApiError::Forbidden)?;
+    if !matches!(role.as_str(), "restaurant_owner" | "manager" | "chef") {
         return Err(ApiError::Forbidden);
     }
-    fetch_orders(&state.db, true).await
+    fetch_orders(&state.db, true, Some(restaurant_id)).await
 }
 
 async fn list_service_orders(
@@ -580,10 +635,18 @@ async fn list_service_orders(
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     let staff = auth::current_staff(&state, &headers).await?;
-    if !auth::can_view_service_orders(&staff.role) {
+    if staff.role == "owner" {
+        return fetch_orders(&state.db, true, None).await;
+    }
+
+    let restaurant_id = default_restaurant_id(&state.db).await?;
+    let role = restaurant_staff_role(&state.db, staff.id, restaurant_id)
+        .await?
+        .ok_or(ApiError::Forbidden)?;
+    if !matches!(role.as_str(), "restaurant_owner" | "manager" | "waiter") {
         return Err(ApiError::Forbidden);
     }
-    fetch_orders(&state.db, true).await
+    fetch_orders(&state.db, true, Some(restaurant_id)).await
 }
 
 async fn list_audit_events(
@@ -783,6 +846,7 @@ async fn main() {
     let app = Router::new()
         .route("/health", get(health))
         .route("/ready", get(readiness))
+        .route("/api/restaurants", get(list_restaurants))
         .route("/api/menu/categories", get(list_categories))
         .route("/api/menu/items", get(list_menu_items))
         .route("/api/orders", axum::routing::post(create_order))
