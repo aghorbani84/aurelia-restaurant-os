@@ -133,7 +133,7 @@ struct MenuCategory {
     slug: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, sqlx::FromRow)]
 struct MenuItem {
     id: i64,
     restaurant_id: i64,
@@ -1011,12 +1011,14 @@ async fn delete_restaurant_menu_item(
     if item_id <= 0 {
         return Err(ApiError::BadRequest("item id must be positive"));
     }
-    let deleted = sqlx::query("DELETE FROM menu_items WHERE id = $1 AND restaurant_id = $2")
-        .bind(item_id)
-        .bind(restaurant_id)
-        .execute(&state.db)
-        .await
-        .map_err(|_| ApiError::Internal)?;
+    let deleted = sqlx::query(
+        "UPDATE menu_items SET available = FALSE WHERE id = $1 AND restaurant_id = $2",
+    )
+    .bind(item_id)
+    .bind(restaurant_id)
+    .execute(&state.db)
+    .await
+    .map_err(|_| ApiError::Internal)?;
     if deleted.rows_affected() == 0 {
         return Err(ApiError::NotFound("menu item not found"));
     }
