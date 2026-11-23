@@ -942,12 +942,17 @@ async fn update_order_status(
     ))
 }
 
-async fn default_restaurant_id(db: &PgPool) -> Result<i64, ApiError> {
-    sqlx::query_scalar("SELECT id FROM restaurants WHERE is_default = TRUE")
-        .fetch_optional(db)
-        .await
-        .map_err(|_| ApiError::Internal)?
-        .ok_or(ApiError::Internal)
+async fn first_staff_restaurant_id(db: &PgPool, staff_user_id: i64) -> Result<i64, ApiError> {
+    sqlx::query_scalar(
+        "SELECT restaurant_id FROM restaurant_staff_memberships
+         WHERE staff_user_id = $1 AND is_active = TRUE
+         ORDER BY restaurant_id ASC LIMIT 1",
+    )
+    .bind(staff_user_id)
+    .fetch_optional(db)
+    .await
+    .map_err(|_| ApiError::Internal)?
+    .ok_or(ApiError::Forbidden)
 }
 
 async fn restaurant_staff_role(
@@ -975,7 +980,7 @@ async fn list_admin_orders(
         return fetch_orders(&state.db, false, None).await;
     }
 
-    let restaurant_id = default_restaurant_id(&state.db).await?;
+    let restaurant_id = first_staff_restaurant_id(&state.db, staff.id).await?;
     let role = restaurant_staff_role(&state.db, staff.id, restaurant_id)
         .await?
         .ok_or(ApiError::Forbidden)?;
