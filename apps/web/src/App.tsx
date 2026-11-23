@@ -16,6 +16,19 @@ type CartLine = MenuItem & { quantity: number };
 
 const formatAmount = (value: number) => new Intl.NumberFormat('fa-IR', { maximumFractionDigits: 0 }).format(value);
 
+const loadCart = (): Record<number, number> => {
+  try {
+    const saved = localStorage.getItem('aurelia-market-cart-v1');
+    if (!saved) return {};
+    const parsed = JSON.parse(saved) as Record<string, unknown>;
+    return Object.fromEntries(Object.entries(parsed).filter(([id, quantity]) =>
+      Number(id) > 0 && typeof quantity === 'number' && Number.isInteger(quantity) && quantity > 0 && quantity <= 99,
+    ).map(([id, quantity]) => [Number(id), quantity as number]));
+  } catch {
+    return {};
+  }
+};
+
 const foodEmoji = (category = '') => {
   const value = category.toLowerCase();
   if (value.includes('پیتزا') || value.includes('pizza')) return '🍕';
@@ -36,7 +49,7 @@ function Storefront() {
   const [activeRestaurantId, setActiveRestaurantId] = useState<number | null>(null);
   const [activeCategory, setActiveCategory] = useState<string | null>(null);
   const [search, setSearch] = useState('');
-  const [cart, setCart] = useState<Record<number, number>>({});
+  const [cart, setCart] = useState<Record<number, number>>(loadCart);
   const [pendingSwitchItem, setPendingSwitchItem] = useState<MenuItem | null>(null);
   const [customerName, setCustomerName] = useState('');
   const [loading, setLoading] = useState(true);
@@ -73,6 +86,10 @@ function Storefront() {
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, []);
+
+  useEffect(() => {
+    try { localStorage.setItem('aurelia-market-cart-v1', JSON.stringify(cart)); } catch { /* storage is optional */ }
+  }, [cart]);
 
   const activeRestaurant = restaurants.find((restaurant) => restaurant.id === activeRestaurantId) ?? null;
   const cartLines = useMemo<CartLine[]>(
@@ -113,6 +130,10 @@ function Storefront() {
   const changeQuantity = (item: MenuItem, delta: number) => {
     setError('');
     setOrder(null);
+    if (delta > 0 && !item.available) {
+      setError('این غذا در حال حاضر موجود نیست.');
+      return;
+    }
     if (delta > 0 && cartRestaurantId !== null && cartRestaurantId !== item.restaurant_id) {
       setPendingSwitchItem(item);
       return;
@@ -320,7 +341,7 @@ function Storefront() {
                 maxLength={120} placeholder="برای ثبت درخواست" required />
               <p className="checkout-note">این نسخه پرداخت آنلاین، آدرس و تحویل را پشتیبانی نمی‌کند؛ فقط درخواست سفارش ثبت می‌شود.</p>
               {error && <p className="form-error" role="alert">{error}</p>}
-              <button className="checkout-submit" type="submit" disabled={submitting || itemCount === 0}>
+              <button className="checkout-submit" type="submit" disabled={submitting || itemCount === 0 || cartLines.some((item) => !item.available)}>
                 {submitting ? <LoaderCircle className="spin" /> : <Check size={18} />}{submitting ? 'در حال ثبت...' : 'ثبت درخواست'}
               </button>
             </form>
