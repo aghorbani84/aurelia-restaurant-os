@@ -75,8 +75,7 @@ ALTER TABLE orders
 
 ALTER TABLE order_lines
     ADD COLUMN restaurant_id BIGINT NOT NULL DEFAULT 1
-        REFERENCES restaurants(id) ON DELETE RESTRICT,
-;
+        REFERENCES restaurants(id) ON DELETE RESTRICT;
 UPDATE order_lines ol
 SET restaurant_id = o.restaurant_id
 FROM orders o
