@@ -44,7 +44,12 @@ Published/secondary 2026 references generally show marketplace delivery commissi
 - A November 2026 comparison for Lieferando/Uber Eats/Wolt: https://www.orderfront.de/vergleich/lieferando-uber-eats-wolt
 - Commission and contract differences / extra costs: https://www.hospello.de/guides/lieferando-uber-eats-costs-germany
 
-**Implication:** the differentiator should be predictable total cost and restaurant-owned customer relationship—not simply an unrealistically low headline rate. Iranian competitor contracts, merchant pain points, payment rails, legal requirements, and city-level delivery costs still require local primary research.
+**Iran-specific signal:** Iranian reporting describes a Competition Council decision (meeting 740, 1404/02/16) finding exclusivity-related restaurant contract practices anti-competitive; later reporting says the appellate competition board upheld a ruling and also addressed misleading rating treatment. Treat this as a reported legal signal—not legal advice or a verified official ruling—until primary decisions are checked.
+
+- Initial council decision report: https://www.ekhtebar.ir/%D8%B4%D9%88%D8%B1%D8%A7%DB%8C-%D8%B1%D9%82%D8%A7%D8%A8%D8%AA-%D8%B1%D9%88%DB%8C%D9%87-%D8%A7%D8%B3%D9%86%D9%BE%D9%81%D9%88%D8%AF-%D8%AF%D8%B1-%D9%86%D8%AD%D9%88%D9%87-%D8%A7%D9%86%D8%B9/
+- Appellate decision coverage: https://digiato.com/iran-technology-news/snappfood-antitrust-ruling-score-manipulation-banned
+
+**Product response:** merchant contracts must be non-exclusive, exit terms simple and fair, ranking rules auditable, verified ratings never secretly weighted by contract status, and sponsored placements visibly separated. The differentiator is predictable total cost and restaurant-owned customer relationship—not an unsustainably low headline rate. Local merchant interviews, payment rails, legal requirements, and city-level delivery costs still require primary research.
 
 ## 4. Pricing hypotheses to validate
 

@@ -9,6 +9,8 @@
 
 > **Project status:** early development. PostgreSQL-backed menu and order APIs, staff login sessions, role-scoped read-only order endpoints, and a basic staff workspace exist. Staff account management, a full kitchen display, inventory, reservations, accounting, payments, production deployment hardening, and full end-to-end browser tests are not implemented. The API supports role-scoped order status transitions and records them in PostgreSQL; the staff workspace still has no status controls.
 
+> **Marketplace status:** migration `0006_marketplace_tenants.sql` adds a default legacy restaurant, tenant ownership columns, tenant-aware relational constraints, and restaurant staff memberships. Existing records map to tenant `legacy-default`. Public APIs and staff endpoints are **not yet tenant-aware**, and multi-restaurant onboarding/order flows are not implemented; do not treat this as a production marketplace.
+
 ## Run locally
 
 Requirements: Docker Engine and Docker Compose plugin.
