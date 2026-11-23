@@ -1,10 +1,10 @@
 mod auth;
 
 use axum::{
-    extract::{Query, State},
+    extract::{Path, Query, State},
     http::{header, HeaderMap, HeaderValue, Method, StatusCode},
     response::{IntoResponse, Response},
-    routing::get,
+    routing::{get, post},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
@@ -104,6 +104,18 @@ struct OrderSummary {
     customer_name: String,
     status: String,
     total_minor: i64,
+}
+
+#[derive(Deserialize)]
+struct UpdateOrderStatusRequest {
+    status: String,
+}
+
+#[derive(Serialize)]
+struct OrderStatusUpdate {
+    id: i64,
+    order_number: String,
+    status: String,
 }
 
 #[derive(Deserialize)]
@@ -326,6 +338,115 @@ async fn fetch_orders(db: &PgPool, active_only: bool) -> Result<Response, ApiErr
         .headers_mut()
         .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     Ok(response)
+}
+
+fn valid_order_transition(from: &str, to: &str) -> bool {
+    matches!(
+        (from, to),
+        ("pending", "accepted")
+            | ("accepted", "preparing")
+            | ("preparing", "ready")
+            | ("ready", "completed")
+            | ("pending", "cancelled")
+            | ("accepted", "cancelled")
+            | ("preparing", "cancelled")
+    )
+}
+
+fn role_can_update_order_status(role: &str, from: &str, to: &str) -> bool {
+    if matches!(role, "owner" | "manager") {
+        return valid_order_transition(from, to);
+    }
+
+    match role {
+        "chef" => matches!(
+            (from, to),
+            ("pending", "accepted")
+                | ("accepted", "preparing")
+                | ("preparing", "ready")
+        ),
+        "waiter" => matches!(
+            (from, to),
+            ("ready", "completed") | ("pending", "cancelled")
+        ),
+        "cashier" => matches!(
+            (from, to),
+            ("pending", "cancelled") | ("accepted", "cancelled")
+        ),
+        _ => false,
+    }
+}
+
+async fn update_order_status(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(order_id): Path<i64>,
+    Json(payload): Json<UpdateOrderStatusRequest>,
+) -> Result<(StatusCode, HeaderMap, Json<OrderStatusUpdate>), ApiError> {
+    auth::validate_request_origin(&state, &headers)?;
+    let staff = auth::current_staff(&state, &headers).await?;
+
+    if order_id <= 0
+        || !matches!(
+            payload.status.as_str(),
+            "pending" | "accepted" | "preparing" | "ready" | "completed" | "cancelled"
+        )
+    {
+        return Err(ApiError::BadRequest("order_id and status must be valid"));
+    }
+
+    let mut tx = state.db.begin().await.map_err(|_| ApiError::Internal)?;
+    let current_status: Option<String> =
+        sqlx::query_scalar("SELECT status FROM orders WHERE id = $1 FOR UPDATE")
+            .bind(order_id)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(|_| ApiError::Internal)?;
+    let current_status = current_status.ok_or(ApiError::NotFound("order not found"))?;
+
+    if !valid_order_transition(&current_status, &payload.status) {
+        return Err(ApiError::Conflict("invalid order status transition"));
+    }
+    if !role_can_update_order_status(&staff.role, &current_status, &payload.status) {
+        return Err(ApiError::Forbidden);
+    }
+
+    let (id, order_number, status) = sqlx::query_as::<_, (i64, String, String)>(
+        "UPDATE orders SET status = $1 WHERE id = $2
+         RETURNING id, order_number, status",
+    )
+    .bind(&payload.status)
+    .bind(order_id)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(|_| ApiError::Internal)?;
+
+    sqlx::query(
+        "INSERT INTO order_status_events
+            (order_id, actor_staff_user_id, from_status, to_status)
+         VALUES ($1, $2, $3, $4)",
+    )
+    .bind(order_id)
+    .bind(staff.id)
+    .bind(&current_status)
+    .bind(&status)
+    .execute(&mut *tx)
+    .await
+    .map_err(|_| ApiError::Internal)?;
+
+    tx.commit().await.map_err(|_| ApiError::Internal)?;
+
+    let mut response_headers = HeaderMap::new();
+    response_headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    Ok((
+        StatusCode::OK,
+        response_headers,
+        Json(OrderStatusUpdate {
+            id,
+            order_number,
+            status,
+        }),
+    ))
 }
 
 async fn list_admin_orders(
@@ -561,6 +682,7 @@ async fn main() {
         .route("/api/menu/categories", get(list_categories))
         .route("/api/menu/items", get(list_menu_items))
         .route("/api/orders", axum::routing::post(create_order))
+        .route("/api/orders/:order_id/status", post(update_order_status))
         .route("/api/admin/orders", get(list_admin_orders))
         .route("/api/admin/audit", get(list_audit_events))
         .route("/api/kitchen/orders", get(list_kitchen_orders))
@@ -598,7 +720,7 @@ mod tests {
             .expect("apply SQLx migrations to test database");
 
         sqlx::query(
-            "TRUNCATE TABLE staff_audit_log, staff_sessions, staff_users, order_lines, orders, menu_items, menu_categories RESTART IDENTITY CASCADE",
+            "TRUNCATE TABLE staff_audit_log, staff_sessions, staff_users, order_status_events, order_lines, orders, menu_items, menu_categories RESTART IDENTITY CASCADE",
         )
         .execute(&db)
         .await
@@ -1036,6 +1158,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn staff_session_headers(
+        state: &AppState,
+        username: &str,
+        password: &str,
+    ) -> HeaderMap {
+        let response = auth::login(
+            State(state.clone()),
+            test_origin_headers(),
+            Json(auth::LoginRequest {
+                username: username.to_owned(),
+                password: password.to_owned(),
+            }),
+        )
+        .await
+        .expect("staff login should succeed");
+        let cookie_pair = response
+            .headers()
+            .get(header::SET_COOKIE)
+            .expect("login should set a cookie")
+            .to_str()
+            .expect("cookie header should be valid")
+            .split(';')
+            .next()
+            .expect("cookie pair");
+        let mut headers = test_origin_headers();
+        headers.insert(
+            header::COOKIE,
+            HeaderValue::from_bytes(cookie_pair.as_bytes()).expect("valid cookie pair"),
+        );
+        headers
+    }
+
     async fn order_creation_uses_database_prices_and_rejects_invalid_orders() {
         let _guard = TEST_DB_LOCK.lock().await;
         let db = test_database().await;
@@ -1150,4 +1304,183 @@ mod tests {
             .expect("count persisted orders");
         assert_eq!(order_count, 1, "rejected orders must not be persisted");
     }
+    #[tokio::test]
+    async fn order_status_transitions_are_role_scoped_atomic_and_logged() {
+        let _guard = TEST_DB_LOCK.lock().await;
+        let db = test_database().await;
+        let owner_password = "a-strong-owner-password";
+        let chef_password = "a-strong-chef-password";
+        let waiter_password = "a-strong-waiter-password";
+
+        auth::bootstrap_owner(&db, "owner_01", owner_password)
+            .await
+            .expect("create owner");
+        auth::create_staff(&db, "chef_01", chef_password, "chef")
+            .await
+            .expect("create chef");
+        auth::create_staff(&db, "waiter_01", waiter_password, "waiter")
+            .await
+            .expect("create waiter");
+
+        let item_id: i64 = sqlx::query_scalar(
+            "INSERT INTO menu_items (name, price_minor, available)
+             VALUES ('Status test meal', 1000, TRUE)
+             RETURNING id",
+        )
+        .fetch_one(&db)
+        .await
+        .expect("insert test item");
+        let (_, Json(first_order)) = submit(
+            &db,
+            "Status test",
+            vec![OrderItemInput {
+                menu_item_id: item_id,
+                quantity: 1,
+            }],
+        )
+        .await
+        .expect("create first order");
+        let (_, Json(second_order)) = submit(
+            &db,
+            "Cancellation test",
+            vec![OrderItemInput {
+                menu_item_id: item_id,
+                quantity: 1,
+            }],
+        )
+        .await
+        .expect("create second order");
+
+        let state = AppState {
+            db: db.clone(),
+            cookie_secure: false,
+            csrf_allowed_origins: vec!["http://localhost:8088".to_owned()],
+        };
+        let owner_headers = staff_session_headers(&state, "owner_01", owner_password).await;
+        let chef_headers = staff_session_headers(&state, "chef_01", chef_password).await;
+        let waiter_headers = staff_session_headers(&state, "waiter_01", waiter_password).await;
+
+        let mut missing_origin = owner_headers.clone();
+        missing_origin.remove(header::ORIGIN);
+        assert!(matches!(
+            update_order_status(
+                State(state.clone()),
+                missing_origin,
+                Path(second_order.id),
+                Json(UpdateOrderStatusRequest {
+                    status: "cancelled".to_owned(),
+                }),
+            )
+            .await,
+            Err(ApiError::Forbidden)
+        ));
+
+        let (_, _, Json(accepted)) = update_order_status(
+            State(state.clone()),
+            owner_headers.clone(),
+            Path(first_order.id),
+            Json(UpdateOrderStatusRequest {
+                status: "accepted".to_owned(),
+            }),
+        )
+        .await
+        .expect("owner should accept pending order");
+        assert_eq!(accepted.status, "accepted");
+
+        let (_, _, Json(preparing)) = update_order_status(
+            State(state.clone()),
+            chef_headers.clone(),
+            Path(first_order.id),
+            Json(UpdateOrderStatusRequest {
+                status: "preparing".to_owned(),
+            }),
+        )
+        .await
+        .expect("chef should start preparation");
+        assert_eq!(preparing.status, "preparing");
+
+        let (_, _, Json(ready)) = update_order_status(
+            State(state.clone()),
+            chef_headers.clone(),
+            Path(first_order.id),
+            Json(UpdateOrderStatusRequest {
+                status: "ready".to_owned(),
+            }),
+        )
+        .await
+        .expect("chef should mark order ready");
+        assert_eq!(ready.status, "ready");
+
+        let (_, _, Json(completed)) = update_order_status(
+            State(state.clone()),
+            waiter_headers,
+            Path(first_order.id),
+            Json(UpdateOrderStatusRequest {
+                status: "completed".to_owned(),
+            }),
+        )
+        .await
+        .expect("waiter should complete ready order");
+        assert_eq!(completed.status, "completed");
+
+        assert!(matches!(
+            update_order_status(
+                State(state.clone()),
+                owner_headers.clone(),
+                Path(first_order.id),
+                Json(UpdateOrderStatusRequest {
+                    status: "preparing".to_owned(),
+                }),
+            )
+            .await,
+            Err(ApiError::Conflict(_))
+        ));
+
+        assert!(matches!(
+            update_order_status(
+                State(state.clone()),
+                chef_headers,
+                Path(second_order.id),
+                Json(UpdateOrderStatusRequest {
+                    status: "cancelled".to_owned(),
+                }),
+            )
+            .await,
+            Err(ApiError::Forbidden)
+        ));
+
+        let (_, _, Json(cancelled)) = update_order_status(
+            State(state.clone()),
+            owner_headers,
+            Path(second_order.id),
+            Json(UpdateOrderStatusRequest {
+                status: "cancelled".to_owned(),
+            }),
+        )
+        .await
+        .expect("owner should cancel pending order");
+        assert_eq!(cancelled.status, "cancelled");
+
+        let events: Vec<(i64, String, String)> = sqlx::query_as(
+            "SELECT order_id, from_status, to_status
+             FROM order_status_events
+             ORDER BY id",
+        )
+        .fetch_all(&db)
+        .await
+        .expect("fetch order status events");
+        assert_eq!(
+            events,
+            vec![
+                (first_order.id, "pending".to_owned(), "accepted".to_owned()),
+                (first_order.id, "accepted".to_owned(), "preparing".to_owned()),
+                (first_order.id, "preparing".to_owned(), "ready".to_owned()),
+                (first_order.id, "ready".to_owned(), "completed".to_owned()),
+                (second_order.id, "pending".to_owned(), "cancelled".to_owned()),
+            ],
+            "only valid transitions should be recorded",
+        );
+    }
+
+
 }
