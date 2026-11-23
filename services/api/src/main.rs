@@ -732,12 +732,11 @@ mod tests {
         let _guard = TEST_DB_LOCK.lock().await;
         let db = test_database().await;
 
-        let default_restaurant: (i64, String, bool) = sqlx::query_as(
-            "SELECT id, slug, is_default FROM restaurants WHERE is_default = TRUE",
-        )
-        .fetch_one(&db)
-        .await
-        .expect("migration should seed a default legacy restaurant");
+        let default_restaurant: (i64, String, bool) =
+            sqlx::query_as("SELECT id, slug, is_default FROM restaurants WHERE is_default = TRUE")
+                .fetch_one(&db)
+                .await
+                .expect("migration should seed a default legacy restaurant");
         assert_eq!(default_restaurant, (1, "legacy-default".to_owned(), true));
 
         let other_slug = format!("tenant-test-{}", Uuid::new_v4().simple());
@@ -788,20 +787,18 @@ mod tests {
         .await
         .expect("legacy order should default to tenant 1");
 
-        let item_tenant: i64 = sqlx::query_scalar(
-            "SELECT restaurant_id FROM menu_items WHERE id = $1",
-        )
-        .bind(default_item_id)
-        .fetch_one(&db)
-        .await
-        .expect("read tenant assignment");
-        let order_tenant: i64 = sqlx::query_scalar(
-            "SELECT restaurant_id FROM orders WHERE id = $1",
-        )
-        .bind(legacy_order_id)
-        .fetch_one(&db)
-        .await
-        .expect("read order tenant assignment");
+        let item_tenant: i64 =
+            sqlx::query_scalar("SELECT restaurant_id FROM menu_items WHERE id = $1")
+                .bind(default_item_id)
+                .fetch_one(&db)
+                .await
+                .expect("read tenant assignment");
+        let order_tenant: i64 =
+            sqlx::query_scalar("SELECT restaurant_id FROM orders WHERE id = $1")
+                .bind(legacy_order_id)
+                .fetch_one(&db)
+                .await
+                .expect("read order tenant assignment");
         assert_eq!(item_tenant, 1);
         assert_eq!(order_tenant, 1);
 
