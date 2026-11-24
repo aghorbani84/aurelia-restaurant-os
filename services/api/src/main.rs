@@ -2160,9 +2160,24 @@ mod tests {
         assert!(!archived_available);
 
         let chef_password = "menu-chef-password-strong";
-        auth::create_staff(&db, "menu_chef", chef_password, "chef")
-            .await
-            .expect("create chef");
+        let chef_id: i64 = sqlx::query_scalar(
+            "INSERT INTO staff_users (username, password_hash, role, is_active)
+             VALUES ('menu_chef', $1, 'chef', TRUE)
+             RETURNING id",
+        )
+        .bind(auth::hash_password(chef_password).expect("hash chef password"))
+        .fetch_one(&db)
+        .await
+        .expect("create chef account");
+        sqlx::query(
+            "INSERT INTO restaurant_staff_memberships (restaurant_id, staff_user_id, role, is_active)
+             VALUES ($1, $2, 'chef', TRUE)",
+        )
+        .bind(restaurant_id)
+        .bind(chef_id)
+        .execute(&db)
+        .await
+        .expect("create chef restaurant membership");
         let chef_headers = staff_session_headers(&state, "menu_chef", chef_password).await;
         assert!(matches!(
             create_restaurant_menu_category(
