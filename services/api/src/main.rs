@@ -733,7 +733,9 @@ async fn create_restaurant_menu_category(
     let (staff, restaurant_id, role) = staff_menu_context(&state, &headers, true).await?;
     let name = payload.name.trim();
     if !(1..=80).contains(&name.chars().count()) {
-        return Err(ApiError::BadRequest("category name must be 1-80 characters"));
+        return Err(ApiError::BadRequest(
+            "category name must be 1-80 characters",
+        ));
     }
 
     let slug = format!("category-{}", Uuid::new_v4().simple());
@@ -748,12 +750,11 @@ async fn create_restaurant_menu_category(
     .fetch_one(&state.db)
     .await
     .map_err(|_| ApiError::Internal)?;
-    let restaurant_name: String =
-        sqlx::query_scalar("SELECT name FROM restaurants WHERE id = $1")
-            .bind(restaurant_id)
-            .fetch_one(&state.db)
-            .await
-            .map_err(|_| ApiError::Internal)?;
+    let restaurant_name: String = sqlx::query_scalar("SELECT name FROM restaurants WHERE id = $1")
+        .bind(restaurant_id)
+        .fetch_one(&state.db)
+        .await
+        .map_err(|_| ApiError::Internal)?;
     record_restaurant_audit(
         &state.db,
         "restaurant_menu_category_created",
@@ -784,14 +785,12 @@ async fn delete_restaurant_menu_category(
     if category_id <= 0 {
         return Err(ApiError::BadRequest("category id must be positive"));
     }
-    let deleted = sqlx::query(
-        "DELETE FROM menu_categories WHERE id = $1 AND restaurant_id = $2",
-    )
-    .bind(category_id)
-    .bind(restaurant_id)
-    .execute(&state.db)
-    .await
-    .map_err(|_| ApiError::Internal)?;
+    let deleted = sqlx::query("DELETE FROM menu_categories WHERE id = $1 AND restaurant_id = $2")
+        .bind(category_id)
+        .bind(restaurant_id)
+        .execute(&state.db)
+        .await
+        .map_err(|_| ApiError::Internal)?;
     if deleted.rows_affected() == 0 {
         return Err(ApiError::NotFound("category not found"));
     }
@@ -896,7 +895,9 @@ async fn validate_menu_category(
         .await
         .map_err(|_| ApiError::Internal)?;
         if !exists {
-            return Err(ApiError::BadRequest("category does not belong to this restaurant"));
+            return Err(ApiError::BadRequest(
+                "category does not belong to this restaurant",
+            ));
         }
     }
     Ok(())
@@ -999,7 +1000,9 @@ async fn update_restaurant_menu_item(
         restaurant_id,
     )
     .await?;
-    Ok(Json(fetch_menu_item(&state.db, restaurant_id, item_id).await?))
+    Ok(Json(
+        fetch_menu_item(&state.db, restaurant_id, item_id).await?,
+    ))
 }
 
 async fn delete_restaurant_menu_item(
@@ -1011,14 +1014,13 @@ async fn delete_restaurant_menu_item(
     if item_id <= 0 {
         return Err(ApiError::BadRequest("item id must be positive"));
     }
-    let deleted = sqlx::query(
-        "UPDATE menu_items SET available = FALSE WHERE id = $1 AND restaurant_id = $2",
-    )
-    .bind(item_id)
-    .bind(restaurant_id)
-    .execute(&state.db)
-    .await
-    .map_err(|_| ApiError::Internal)?;
+    let deleted =
+        sqlx::query("UPDATE menu_items SET available = FALSE WHERE id = $1 AND restaurant_id = $2")
+            .bind(item_id)
+            .bind(restaurant_id)
+            .execute(&state.db)
+            .await
+            .map_err(|_| ApiError::Internal)?;
     if deleted.rows_affected() == 0 {
         return Err(ApiError::NotFound("menu item not found"));
     }
@@ -1043,15 +1045,14 @@ async fn set_restaurant_menu_item_availability(
     if item_id <= 0 {
         return Err(ApiError::BadRequest("item id must be positive"));
     }
-    let updated = sqlx::query(
-        "UPDATE menu_items SET available = $1 WHERE id = $2 AND restaurant_id = $3",
-    )
-    .bind(payload.available)
-    .bind(item_id)
-    .bind(restaurant_id)
-    .execute(&state.db)
-    .await
-    .map_err(|_| ApiError::Internal)?;
+    let updated =
+        sqlx::query("UPDATE menu_items SET available = $1 WHERE id = $2 AND restaurant_id = $3")
+            .bind(payload.available)
+            .bind(item_id)
+            .bind(restaurant_id)
+            .execute(&state.db)
+            .await
+            .map_err(|_| ApiError::Internal)?;
     if updated.rows_affected() == 0 {
         return Err(ApiError::NotFound("menu item not found"));
     }
@@ -1063,7 +1064,9 @@ async fn set_restaurant_menu_item_availability(
         restaurant_id,
     )
     .await?;
-    Ok(Json(fetch_menu_item(&state.db, restaurant_id, item_id).await?))
+    Ok(Json(
+        fetch_menu_item(&state.db, restaurant_id, item_id).await?,
+    ))
 }
 
 async fn create_order(
@@ -2007,7 +2010,8 @@ mod tests {
         .execute(&db)
         .await
         .expect("create tenant membership");
-        let headers = staff_session_headers(&state, "menu_owner", "menu-owner-password-strong").await;
+        let headers =
+            staff_session_headers(&state, "menu_owner", "menu-owner-password-strong").await;
 
         let (category_status, Json(category)) = create_restaurant_menu_category(
             State(state.clone()),
@@ -2098,13 +2102,9 @@ mod tests {
             Err(ApiError::NotFound("menu item not found"))
         ));
 
-        delete_restaurant_menu_category(
-            State(state.clone()),
-            headers.clone(),
-            Path(category.id),
-        )
-        .await
-        .expect("owner can remove a category");
+        delete_restaurant_menu_category(State(state.clone()), headers.clone(), Path(category.id))
+            .await
+            .expect("owner can remove a category");
         let category_after_delete: Option<i64> =
             sqlx::query_scalar("SELECT category_id FROM menu_items WHERE id = $1")
                 .bind(item.id)
@@ -2179,7 +2179,8 @@ mod tests {
         .execute(&db)
         .await
         .expect("create tenant membership");
-        let headers = staff_session_headers(&state, "menu_owner", "menu-owner-password-strong").await;
+        let headers =
+            staff_session_headers(&state, "menu_owner", "menu-owner-password-strong").await;
 
         let (category_status, Json(category)) = create_restaurant_menu_category(
             State(state.clone()),
