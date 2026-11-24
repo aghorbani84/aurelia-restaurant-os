@@ -458,6 +458,7 @@ async fn review_restaurant_application(
     Path(application_id): Path<i64>,
     Json(payload): Json<ReviewRestaurantApplicationRequest>,
 ) -> Result<(StatusCode, Json<RestaurantApplicationReview>), ApiError> {
+    auth::validate_request_origin(&state, &headers)?;
     let staff = auth::current_staff(&state, &headers).await?;
     if staff.role != "owner" {
         return Err(ApiError::Forbidden);
@@ -1858,6 +1859,22 @@ mod tests {
         .expect("valid application should submit");
         assert_eq!(submitted_status, StatusCode::CREATED);
         assert_eq!(submitted.status, "pending_review");
+
+        let mut missing_origin_headers = owner_headers.clone();
+        missing_origin_headers.remove(header::ORIGIN);
+        assert!(matches!(
+            review_restaurant_application(
+                State(state.clone()),
+                missing_origin_headers,
+                Path(submitted.application_id),
+                Json(ReviewRestaurantApplicationRequest {
+                    decision: "approve".to_owned(),
+                    note: None,
+                }),
+            )
+            .await,
+            Err(ApiError::Forbidden)
+        ));
 
         let pending_owner_active: bool =
             sqlx::query_scalar("SELECT is_active FROM staff_users WHERE username = 'north_owner'")
