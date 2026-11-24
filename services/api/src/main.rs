@@ -739,6 +739,7 @@ async fn create_restaurant_menu_category(
     }
 
     let slug = format!("category-{}", Uuid::new_v4().simple());
+    let mut tx = state.db.begin().await.map_err(|_| ApiError::Internal)?;
     let row: (i64, String, String) = sqlx::query_as(
         "INSERT INTO menu_categories (restaurant_id, name, slug)
          VALUES ($1, $2, $3)
@@ -747,22 +748,23 @@ async fn create_restaurant_menu_category(
     .bind(restaurant_id)
     .bind(name)
     .bind(slug)
-    .fetch_one(&state.db)
+    .fetch_one(&mut *tx)
     .await
     .map_err(|_| ApiError::Internal)?;
     let restaurant_name: String = sqlx::query_scalar("SELECT name FROM restaurants WHERE id = $1")
         .bind(restaurant_id)
-        .fetch_one(&state.db)
+        .fetch_one(&mut *tx)
         .await
         .map_err(|_| ApiError::Internal)?;
     record_restaurant_audit(
-        &state.db,
+        &mut tx,
         "restaurant_menu_category_created",
         staff.id,
         &role,
         restaurant_id,
     )
     .await?;
+    tx.commit().await.map_err(|_| ApiError::Internal)?;
 
     Ok((
         StatusCode::CREATED,
@@ -785,23 +787,26 @@ async fn delete_restaurant_menu_category(
     if category_id <= 0 {
         return Err(ApiError::BadRequest("category id must be positive"));
     }
+
+    let mut tx = state.db.begin().await.map_err(|_| ApiError::Internal)?;
     let deleted = sqlx::query("DELETE FROM menu_categories WHERE id = $1 AND restaurant_id = $2")
         .bind(category_id)
         .bind(restaurant_id)
-        .execute(&state.db)
+        .execute(&mut *tx)
         .await
         .map_err(|_| ApiError::Internal)?;
     if deleted.rows_affected() == 0 {
         return Err(ApiError::NotFound("category not found"));
     }
     record_restaurant_audit(
-        &state.db,
+        &mut tx,
         "restaurant_menu_category_deleted",
         staff.id,
         &role,
         restaurant_id,
     )
     .await?;
+    tx.commit().await.map_err(|_| ApiError::Internal)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -934,6 +939,7 @@ async fn create_restaurant_menu_item(
     validate_menu_item_payload(&payload)?;
     validate_menu_category(&state.db, restaurant_id, payload.category_id).await?;
 
+    let mut tx = state.db.begin().await.map_err(|_| ApiError::Internal)?;
     let item_id: i64 = sqlx::query_scalar(
         "INSERT INTO menu_items
             (restaurant_id, category_id, name, description, price_minor, available)
@@ -946,17 +952,19 @@ async fn create_restaurant_menu_item(
     .bind(payload.description.trim())
     .bind(payload.price_minor)
     .bind(payload.available)
-    .fetch_one(&state.db)
+    .fetch_one(&mut *tx)
     .await
     .map_err(|_| ApiError::Internal)?;
     record_restaurant_audit(
-        &state.db,
+        &mut tx,
         "restaurant_menu_item_created",
         staff.id,
         &role,
         restaurant_id,
     )
     .await?;
+    tx.commit().await.map_err(|_| ApiError::Internal)?;
+
     let item = fetch_menu_item(&state.db, restaurant_id, item_id).await?;
     Ok((StatusCode::CREATED, Json(item)))
 }
@@ -974,6 +982,7 @@ async fn update_restaurant_menu_item(
     validate_menu_item_payload(&payload)?;
     validate_menu_category(&state.db, restaurant_id, payload.category_id).await?;
 
+    let mut tx = state.db.begin().await.map_err(|_| ApiError::Internal)?;
     let updated = sqlx::query(
         "UPDATE menu_items
          SET category_id = $1, name = $2, description = $3, price_minor = $4, available = $5
@@ -986,23 +995,23 @@ async fn update_restaurant_menu_item(
     .bind(payload.available)
     .bind(item_id)
     .bind(restaurant_id)
-    .execute(&state.db)
+    .execute(&mut *tx)
     .await
     .map_err(|_| ApiError::Internal)?;
     if updated.rows_affected() == 0 {
         return Err(ApiError::NotFound("menu item not found"));
     }
     record_restaurant_audit(
-        &state.db,
+        &mut tx,
         "restaurant_menu_item_updated",
         staff.id,
         &role,
         restaurant_id,
     )
     .await?;
-    Ok(Json(
-        fetch_menu_item(&state.db, restaurant_id, item_id).await?,
-    ))
+    tx.commit().await.map_err(|_| ApiError::Internal)?;
+
+    Ok(Json(fetch_menu_item(&state.db, restaurant_id, item_id).await?))
 }
 
 async fn delete_restaurant_menu_item(
@@ -1014,24 +1023,27 @@ async fn delete_restaurant_menu_item(
     if item_id <= 0 {
         return Err(ApiError::BadRequest("item id must be positive"));
     }
+
+    let mut tx = state.db.begin().await.map_err(|_| ApiError::Internal)?;
     let deleted =
         sqlx::query("UPDATE menu_items SET available = FALSE WHERE id = $1 AND restaurant_id = $2")
             .bind(item_id)
             .bind(restaurant_id)
-            .execute(&state.db)
+            .execute(&mut *tx)
             .await
             .map_err(|_| ApiError::Internal)?;
     if deleted.rows_affected() == 0 {
         return Err(ApiError::NotFound("menu item not found"));
     }
     record_restaurant_audit(
-        &state.db,
+        &mut tx,
         "restaurant_menu_item_deleted",
         staff.id,
         &role,
         restaurant_id,
     )
     .await?;
+    tx.commit().await.map_err(|_| ApiError::Internal)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1045,28 +1057,30 @@ async fn set_restaurant_menu_item_availability(
     if item_id <= 0 {
         return Err(ApiError::BadRequest("item id must be positive"));
     }
+
+    let mut tx = state.db.begin().await.map_err(|_| ApiError::Internal)?;
     let updated =
         sqlx::query("UPDATE menu_items SET available = $1 WHERE id = $2 AND restaurant_id = $3")
             .bind(payload.available)
             .bind(item_id)
             .bind(restaurant_id)
-            .execute(&state.db)
+            .execute(&mut *tx)
             .await
             .map_err(|_| ApiError::Internal)?;
     if updated.rows_affected() == 0 {
         return Err(ApiError::NotFound("menu item not found"));
     }
     record_restaurant_audit(
-        &state.db,
+        &mut tx,
         "restaurant_menu_item_updated",
         staff.id,
         &role,
         restaurant_id,
     )
     .await?;
-    Ok(Json(
-        fetch_menu_item(&state.db, restaurant_id, item_id).await?,
-    ))
+    tx.commit().await.map_err(|_| ApiError::Internal)?;
+
+    Ok(Json(fetch_menu_item(&state.db, restaurant_id, item_id).await?))
 }
 
 async fn create_order(
@@ -1416,7 +1430,7 @@ async fn staff_menu_context(
 }
 
 async fn record_restaurant_audit(
-    db: &PgPool,
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     event_type: &str,
     actor_staff_user_id: i64,
     subject_role: &str,
@@ -1431,7 +1445,7 @@ async fn record_restaurant_audit(
     .bind(actor_staff_user_id)
     .bind(subject_role)
     .bind(restaurant_id)
-    .execute(db)
+    .execute(&mut **tx)
     .await
     .map_err(|_| ApiError::Internal)?;
     Ok(())
@@ -2309,6 +2323,46 @@ mod tests {
             .await,
             Err(ApiError::Forbidden)
         ));
+    }
+
+    #[tokio::test]
+    async fn restaurant_menu_audit_failure_rolls_back_menu_mutation() {
+        let _guard = TEST_DB_LOCK.lock().await;
+        let db = test_database().await;
+        auth::bootstrap_owner(&db, "platform_owner", "platform-owner-password-strong")
+            .await
+            .expect("create platform owner");
+        let owner_id: i64 = sqlx::query_scalar(
+            "SELECT id FROM staff_users WHERE username = 'platform_owner'",
+        )
+        .fetch_one(&db)
+        .await
+        .expect("load platform owner");
+
+        let mut tx = db.begin().await.expect("begin menu mutation transaction");
+        let item_id: i64 = sqlx::query_scalar(
+            "INSERT INTO menu_items (restaurant_id, name, price_minor, available)
+             VALUES (1, 'Rollback test item', 1000, TRUE)
+             RETURNING id",
+        )
+        .fetch_one(&mut *tx)
+        .await
+        .expect("insert menu item inside transaction");
+
+        let audit_result =
+            record_restaurant_audit(&mut tx, "invalid_menu_event", owner_id, "owner", 1).await;
+        assert!(audit_result.is_err(), "invalid audit event must fail its database constraint");
+        tx.rollback()
+            .await
+            .expect("failed audit must allow the menu transaction to roll back");
+
+        let item_exists: bool =
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM menu_items WHERE id = $1)")
+                .bind(item_id)
+                .fetch_one(&db)
+                .await
+                .expect("verify menu item rollback");
+        assert!(!item_exists, "menu mutation must not persist without its audit event");
     }
 
     #[tokio::test]
