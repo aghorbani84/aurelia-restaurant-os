@@ -1011,7 +1011,9 @@ async fn update_restaurant_menu_item(
     .await?;
     tx.commit().await.map_err(|_| ApiError::Internal)?;
 
-    Ok(Json(fetch_menu_item(&state.db, restaurant_id, item_id).await?))
+    Ok(Json(
+        fetch_menu_item(&state.db, restaurant_id, item_id).await?,
+    ))
 }
 
 async fn delete_restaurant_menu_item(
@@ -1080,7 +1082,9 @@ async fn set_restaurant_menu_item_availability(
     .await?;
     tx.commit().await.map_err(|_| ApiError::Internal)?;
 
-    Ok(Json(fetch_menu_item(&state.db, restaurant_id, item_id).await?))
+    Ok(Json(
+        fetch_menu_item(&state.db, restaurant_id, item_id).await?,
+    ))
 }
 
 async fn create_order(
@@ -2056,176 +2060,7 @@ mod tests {
         assert_eq!(item.restaurant_id, restaurant_id);
         assert_eq!(item.category_id, Some(category.id));
 
-        let (_, Json(updated_item)) = update_restaurant_menu_item(
-            State(state.clone()),
-            headers.clone(),
-            Path(item.id),
-            Json(MenuItemMutationRequest {
-                name: "Grilled chicken plate".to_owned(),
-                description: "Updated details".to_owned(),
-                category_id: Some(category.id),
-                price_minor: 55000,
-                available: false,
-            }),
-        )
-        .await
-        .expect("owner can update their menu item");
-        assert_eq!(updated_item.name, "Grilled chicken plate");
-        assert_eq!(updated_item.price_minor, 55000);
-        assert!(!updated_item.available);
-
-        let staff_items = list_restaurant_menu_items(State(state.clone()), headers.clone())
-            .await
-            .expect("owner can list own menu");
-        assert_eq!(staff_items.0.len(), 1);
-        assert_eq!(staff_items.0[0].id, item.id);
-
-        let other_restaurant_id: i64 = sqlx::query_scalar(
-            "INSERT INTO restaurants (slug, name, status)
-             VALUES ($1, 'Menu Tenant Two', 'active')
-             RETURNING id",
-        )
-        .bind(format!("menu-other-{}", Uuid::new_v4().simple()))
-        .fetch_one(&db)
-        .await
-        .expect("create second menu tenant");
-        let other_item_id: i64 = sqlx::query_scalar(
-            "INSERT INTO menu_items (restaurant_id, name, price_minor, available)
-             VALUES ($1, 'Private menu item', 12000, TRUE)
-             RETURNING id",
-        )
-        .bind(other_restaurant_id)
-        .fetch_one(&db)
-        .await
-        .expect("create second tenant item");
-
-        assert!(matches!(
-            update_restaurant_menu_item(
-                State(state.clone()),
-                headers.clone(),
-                Path(other_item_id),
-                Json(MenuItemMutationRequest {
-                    name: "Unauthorized change".to_owned(),
-                    description: String::new(),
-                    category_id: None,
-                    price_minor: 12000,
-                    available: true,
-                }),
-            )
-            .await,
-            Err(ApiError::NotFound("menu item not found"))
-        ));
-
-        delete_restaurant_menu_category(State(state.clone()), headers.clone(), Path(category.id))
-            .await
-            .expect("owner can remove a category");
-        let category_after_delete: Option<i64> =
-            sqlx::query_scalar("SELECT category_id FROM menu_items WHERE id = $1")
-                .bind(item.id)
-                .fetch_one(&db)
-                .await
-                .expect("category removal should preserve menu item");
-        assert_eq!(category_after_delete, None);
-
-        delete_restaurant_menu_item(State(state.clone()), headers.clone(), Path(item.id))
-            .await
-            .expect("menu delete should archive by marking unavailable");
-        let archived_available: bool =
-            sqlx::query_scalar("SELECT available FROM menu_items WHERE id = $1")
-                .bind(item.id)
-                .fetch_one(&db)
-                .await
-                .expect("soft removed item should remain for order history");
-        assert!(!archived_available);
-
-        let chef_password = "menu-chef-password-strong";
-        auth::create_staff(&db, "menu_chef", chef_password, "chef")
-            .await
-            .expect("create chef");
-        let chef_headers = staff_session_headers(&state, "menu_chef", chef_password).await;
-        assert!(matches!(
-            create_restaurant_menu_category(
-                State(state),
-                chef_headers,
-                Json(CreateMenuCategoryRequest {
-                    name: "Unauthorized category".to_owned(),
-                }),
-            )
-            .await,
-            Err(ApiError::Forbidden)
-        ));
-    }
-
-    #[tokio::test]
-    async fn restaurant_menu_crud_is_tenant_scoped_and_soft_removes_items() {
-        let _guard = TEST_DB_LOCK.lock().await;
-        let db = test_database().await;
-        let state = AppState {
-            db: db.clone(),
-            cookie_secure: false,
-            csrf_allowed_origins: vec!["http://localhost:8088".to_owned()],
-        };
-
-        let restaurant_id: i64 = sqlx::query_scalar(
-            "INSERT INTO restaurants (slug, name, status)
-             VALUES ($1, 'Menu Owner Tenant', 'active')
-             RETURNING id",
-        )
-        .bind(format!("menu-test-{}", Uuid::new_v4().simple()))
-        .fetch_one(&db)
-        .await
-        .expect("create menu tenant");
-        let staff_id: i64 = sqlx::query_scalar(
-            "INSERT INTO staff_users (username, password_hash, role, is_active)
-             VALUES ('menu_owner', $1, 'manager', TRUE)
-             RETURNING id",
-        )
-        .bind(auth::hash_password("menu-owner-password-strong").expect("hash password"))
-        .fetch_one(&db)
-        .await
-        .expect("create menu owner account");
-        sqlx::query(
-            "INSERT INTO restaurant_staff_memberships (restaurant_id, staff_user_id, role, is_active)
-             VALUES ($1, $2, 'restaurant_owner', TRUE)",
-        )
-        .bind(restaurant_id)
-        .bind(staff_id)
-        .execute(&db)
-        .await
-        .expect("create tenant membership");
-        let headers =
-            staff_session_headers(&state, "menu_owner", "menu-owner-password-strong").await;
-
-        let (category_status, Json(category)) = create_restaurant_menu_category(
-            State(state.clone()),
-            headers.clone(),
-            Json(CreateMenuCategoryRequest {
-                name: "Main dishes".to_owned(),
-            }),
-        )
-        .await
-        .expect("owner can create category");
-        assert_eq!(category_status, StatusCode::CREATED);
-        assert_eq!(category.restaurant_id, restaurant_id);
-
-        let (item_status, Json(item)) = create_restaurant_menu_item(
-            State(state.clone()),
-            headers.clone(),
-            Json(MenuItemMutationRequest {
-                name: "Grilled chicken".to_owned(),
-                description: "Freshly prepared".to_owned(),
-                category_id: Some(category.id),
-                price_minor: 42000,
-                available: true,
-            }),
-        )
-        .await
-        .expect("owner can create menu item");
-        assert_eq!(item_status, StatusCode::CREATED);
-        assert_eq!(item.restaurant_id, restaurant_id);
-        assert_eq!(item.category_id, Some(category.id));
-
-        let (_, Json(updated_item)) = update_restaurant_menu_item(
+        let Json(updated_item) = update_restaurant_menu_item(
             State(state.clone()),
             headers.clone(),
             Path(item.id),
@@ -2332,12 +2167,11 @@ mod tests {
         auth::bootstrap_owner(&db, "platform_owner", "platform-owner-password-strong")
             .await
             .expect("create platform owner");
-        let owner_id: i64 = sqlx::query_scalar(
-            "SELECT id FROM staff_users WHERE username = 'platform_owner'",
-        )
-        .fetch_one(&db)
-        .await
-        .expect("load platform owner");
+        let owner_id: i64 =
+            sqlx::query_scalar("SELECT id FROM staff_users WHERE username = 'platform_owner'")
+                .fetch_one(&db)
+                .await
+                .expect("load platform owner");
 
         let mut tx = db.begin().await.expect("begin menu mutation transaction");
         let item_id: i64 = sqlx::query_scalar(
@@ -2351,7 +2185,10 @@ mod tests {
 
         let audit_result =
             record_restaurant_audit(&mut tx, "invalid_menu_event", owner_id, "owner", 1).await;
-        assert!(audit_result.is_err(), "invalid audit event must fail its database constraint");
+        assert!(
+            audit_result.is_err(),
+            "invalid audit event must fail its database constraint"
+        );
         tx.rollback()
             .await
             .expect("failed audit must allow the menu transaction to roll back");
@@ -2362,7 +2199,10 @@ mod tests {
                 .fetch_one(&db)
                 .await
                 .expect("verify menu item rollback");
-        assert!(!item_exists, "menu mutation must not persist without its audit event");
+        assert!(
+            !item_exists,
+            "menu mutation must not persist without its audit event"
+        );
     }
 
     #[tokio::test]
