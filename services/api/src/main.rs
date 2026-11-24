@@ -243,15 +243,25 @@ async fn readiness(State(state): State<AppState>) -> Result<Json<HealthResponse>
     Ok(Json(HealthResponse { status: "ready" }))
 }
 
-fn valid_contact_phone(phone: &str) -> bool {
-    let digits = phone
+fn normalize_contact_phone(phone: &str) -> Option<String> {
+    let mut normalized = String::with_capacity(phone.len());
+    for character in phone.chars() {
+        let character = match character {
+            '۰'..='۹' => char::from(b'0' + (character as u32 - '۰' as u32) as u8),
+            '٠'..='٩' => char::from(b'0' + (character as u32 - '٠' as u32) as u8),
+            other => other,
+        };
+        if !character.is_ascii_digit() && !matches!(character, '+' | ' ' | '-' | '(' | ')') {
+            return None;
+        }
+        normalized.push(character);
+    }
+
+    let digits = normalized
         .chars()
         .filter(|character| character.is_ascii_digit())
         .count();
-    (8..=15).contains(&digits)
-        && phone.chars().all(|character| {
-            character.is_ascii_digit() || matches!(character, '+' | ' ' | '-' | '(' | ')')
-        })
+    (8..=15).contains(&digits).then_some(normalized)
 }
 
 async fn submit_restaurant_application(
@@ -260,7 +270,8 @@ async fn submit_restaurant_application(
 ) -> Result<(StatusCode, Json<RestaurantApplicationSubmitted>), ApiError> {
     let restaurant_name = payload.restaurant_name.trim();
     let contact_name = payload.contact_name.trim();
-    let contact_phone = payload.contact_phone.trim();
+    let contact_phone = normalize_contact_phone(payload.contact_phone.trim())
+        .ok_or(ApiError::BadRequest("contact phone is invalid"))?;
     let contact_email = payload.contact_email.trim().to_ascii_lowercase();
     let city = payload.city.trim();
     let address = payload.address.trim();
@@ -269,7 +280,6 @@ async fn submit_restaurant_application(
 
     if !(1..=160).contains(&restaurant_name.chars().count())
         || !(1..=120).contains(&contact_name.chars().count())
-        || !valid_contact_phone(contact_phone)
         || !(1..=80).contains(&city.chars().count())
         || !(5..=500).contains(&address.chars().count())
         || !(1..=100).contains(&cuisine.chars().count())
@@ -1822,6 +1832,19 @@ mod tests {
             .expect("reset restaurant sequence");
 
         db
+    }
+
+    #[test]
+    fn contact_phone_normalization_supports_persian_and_arabic_indic_digits() {
+        assert_eq!(
+            normalize_contact_phone("+۹۸۹۱۲۱۲۳۴۵۶۷").as_deref(),
+            Some("+989121234567")
+        );
+        assert_eq!(
+            normalize_contact_phone("٠٩١٢١٢٣٤٥٦٧").as_deref(),
+            Some("09121234567")
+        );
+        assert!(normalize_contact_phone("0912ABC4567").is_none());
     }
 
     #[tokio::test]
