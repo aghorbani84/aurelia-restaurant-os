@@ -1389,16 +1389,23 @@ async fn update_order_status(
 }
 
 async fn first_staff_restaurant_id(db: &PgPool, staff_user_id: i64) -> Result<i64, ApiError> {
-    sqlx::query_scalar(
+    let restaurant_ids: Vec<i64> = sqlx::query_scalar(
         "SELECT restaurant_id FROM restaurant_staff_memberships
          WHERE staff_user_id = $1 AND is_active = TRUE
-         ORDER BY restaurant_id ASC LIMIT 1",
+         ORDER BY restaurant_id ASC LIMIT 2",
     )
     .bind(staff_user_id)
-    .fetch_optional(db)
+    .fetch_all(db)
     .await
-    .map_err(|_| ApiError::Internal)?
-    .ok_or(ApiError::Forbidden)
+    .map_err(|_| ApiError::Internal)?;
+
+    match restaurant_ids.as_slice() {
+        [] => Err(ApiError::Forbidden),
+        [restaurant_id] => Ok(*restaurant_id),
+        _ => Err(ApiError::Conflict(
+            "multiple active restaurant memberships require an explicit restaurant selection",
+        )),
+    }
 }
 
 async fn default_restaurant_id(db: &PgPool) -> Result<i64, ApiError> {
@@ -1845,6 +1852,102 @@ mod tests {
             Some("09121234567")
         );
         assert!(normalize_contact_phone("0912ABC4567").is_none());
+    }
+
+    #[tokio::test]
+    async fn staff_with_multiple_active_restaurant_memberships_must_select_explicitly() {
+        let _guard = TEST_DB_LOCK.lock().await;
+        let db = test_database().await;
+        let state = AppState {
+            db: db.clone(),
+            cookie_secure: false,
+            csrf_allowed_origins: vec!["http://localhost:8088".to_owned()],
+        };
+
+        let first_restaurant_id: i64 = sqlx::query_scalar(
+            "INSERT INTO restaurants (slug, name, status)
+             VALUES ($1, 'Multi Membership One', 'active')
+             RETURNING id",
+        )
+        .bind(format!("multi-one-{}", Uuid::new_v4().simple()))
+        .fetch_one(&db)
+        .await
+        .expect("create first restaurant");
+
+        let second_restaurant_id: i64 = sqlx::query_scalar(
+            "INSERT INTO restaurants (slug, name, status)
+             VALUES ($1, 'Multi Membership Two', 'active')
+             RETURNING id",
+        )
+        .bind(format!("multi-two-{}", Uuid::new_v4().simple()))
+        .fetch_one(&db)
+        .await
+        .expect("create second restaurant");
+
+        let staff_id: i64 = sqlx::query_scalar(
+            "INSERT INTO staff_users (username, password_hash, role, is_active)
+             VALUES ('multi_manager', $1, 'manager', TRUE)
+             RETURNING id",
+        )
+        .bind(auth::hash_password("multi-manager-password-strong").expect("hash password"))
+        .fetch_one(&db)
+        .await
+        .expect("create multi-restaurant manager");
+
+        for restaurant_id in [first_restaurant_id, second_restaurant_id] {
+            sqlx::query(
+                "INSERT INTO restaurant_staff_memberships
+                    (restaurant_id, staff_user_id, role, is_active)
+                 VALUES ($1, $2, 'manager', TRUE)",
+            )
+            .bind(restaurant_id)
+            .bind(staff_id)
+            .execute(&db)
+            .await
+            .expect("create active restaurant membership");
+        }
+
+        let headers =
+            staff_session_headers(&state, "multi_manager", "multi-manager-password-strong").await;
+
+        assert!(matches!(
+            first_staff_restaurant_id(&db, staff_id).await,
+            Err(ApiError::Conflict(_))
+        ));
+        assert!(matches!(
+            staff_menu_context(&state, &headers, false).await,
+            Err(ApiError::Conflict(_))
+        ));
+        assert!(matches!(
+            list_admin_orders(State(state.clone()), headers.clone()).await,
+            Err(ApiError::Conflict(_))
+        ));
+        assert!(matches!(
+            list_kitchen_orders(State(state.clone()), headers.clone()).await,
+            Err(ApiError::Conflict(_))
+        ));
+        assert!(matches!(
+            list_service_orders(State(state.clone()), headers).await,
+            Err(ApiError::Conflict(_))
+        ));
+
+        sqlx::query(
+            "UPDATE restaurant_staff_memberships
+             SET is_active = FALSE
+             WHERE restaurant_id = $1 AND staff_user_id = $2",
+        )
+        .bind(second_restaurant_id)
+        .bind(staff_id)
+        .execute(&db)
+        .await
+        .expect("deactivate second membership");
+
+        assert_eq!(
+            first_staff_restaurant_id(&db, staff_id)
+                .await
+                .expect("one active membership should resolve"),
+            first_restaurant_id
+        );
     }
 
     #[tokio::test]
