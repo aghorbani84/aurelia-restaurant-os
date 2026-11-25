@@ -1,47 +1,77 @@
-# AURELIA Restaurant OS
+# AURELIA
 
-**AURELIA** is a Persian-first restaurant platform under active development. The current stack is:
+> A Persian-first, multi-restaurant ordering platform in early development: Rust API, React web app, PostgreSQL, and an OpenResty gateway.
 
-- **Web:** React, Vite, Three.js
-- **API:** Rust, Axum, SQLx
-- **Database:** PostgreSQL 16
-- **Gateway:** OpenResty / LuaJIT
+[![CI](https://github.com/aghorbani84/aurelia-restaurant-os/actions/workflows/ci.yml/badge.svg)](https://github.com/aghorbani84/aurelia-restaurant-os/actions/workflows/ci.yml)
+![Rust](https://img.shields.io/badge/Rust-Axum%20%2B%20SQLx-000000?logo=rust)
+![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=white)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-4169E1?logo=postgresql&logoColor=white)
+![OpenResty](https://img.shields.io/badge/gateway-OpenResty-15A6D1)
+![Status](https://img.shields.io/badge/status-early%20development-orange)
 
-> **Project status:** early development. PostgreSQL-backed menu and order APIs, staff login sessions, role-scoped read-only order endpoints, and a basic staff workspace exist. Staff account management, a full kitchen display, inventory, reservations, accounting, payments, production deployment hardening, and full end-to-end browser tests are not implemented. The API supports role-scoped order status transitions and records them in PostgreSQL; the staff workspace still has no status controls.
+## Overview
 
-> **Marketplace status:** tenant schema, restaurant discovery, tenant-filtered menus, single-restaurant cart validation, and tenant-scoped staff order access are implemented. A Persian-first customer marketplace UI is merged. Restaurant applications with inactive owner accounts, manual admin approval/rejection, and stricter gateway rate limiting are in development/PR review. Menu management, owner dashboard, customer accounts/address, payment, logistics, and production readiness remain incomplete; do not treat this as a production marketplace.
+AURELIA started as a single-restaurant system and is being extended into a multi-restaurant food marketplace (see [`docs/marketplace-foundation.md`](docs/marketplace-foundation.md)). It is a modular monolith: one Rust API behind a rate-limiting OpenResty gateway, a React/Vite web app, and PostgreSQL with versioned migrations.
 
-## Run locally
+> **Not production-ready.** Payments, customer accounts, logistics, menu management UI, a full kitchen display, inventory, reservations, accounting, and production deployment hardening are not implemented.
 
-Requirements: Docker Engine and Docker Compose plugin.
+## Features
+
+What the code implements today:
+
+- **Customer web app (Persian, RTL)** – restaurant discovery, menus, and guest ordering
+- **Restaurant onboarding** – public application form at `/restaurant/apply`; the owner account stays inactive until an owner-role reviewer approves or rejects the application
+- **Tenant-aware data** – restaurants, tenant-filtered menus, single-restaurant carts, and tenant-scoped staff order access
+- **Server-side pricing** – order totals are computed from database prices in integer minor units, with overflow checks, in a single transaction
+- **Staff authentication** – Argon2id password hashes, opaque session tokens stored as SHA-256 hashes, `HttpOnly` / `SameSite=Lax` / `Secure` cookies with a 12-hour lifetime
+- **Role-based access** – `owner`, `manager`, `cashier`, `chef`, and `waiter` roles with separate admin, kitchen, and service order views
+- **Order status workflow** – `pending → accepted → preparing → ready → completed`, with role-scoped transitions and cancellation from early states; every change is recorded in `order_status_events`
+- **Audit log** – staff lifecycle events, failed logins, and restaurant-application decisions, with an owner-only paginated API and viewer in the `/staff` workspace
+- **Request hardening** – exact-origin CORS allowlist (off by default), Origin-based CSRF checks on staff login, logout, and order status changes, and per-IP rate limits at the gateway (stricter for login and restaurant applications)
+
+## Architecture
+
+| Component | Tech | Location |
+| --- | --- | --- |
+| Web app | React 19, TypeScript, Vite | `apps/web` |
+| API | Rust, Axum 0.7, SQLx 0.8, Tokio | `services/api` |
+| Database | PostgreSQL 16, versioned SQLx migrations | `services/api/migrations` |
+| Gateway | OpenResty / LuaJIT (rate limiting, `/api/` proxy) | `services/gateway` |
+| Local stack | Docker Compose | `docker-compose.yml` |
+
+The API listens on port `8080` inside the Docker network only and is reached through the gateway, so its rate limits cannot be bypassed from the host.
+
+## Getting started
+
+Requires Docker Engine with the Compose plugin.
 
 ```bash
-# Use a non-default password even for a shared development machine.
+git clone https://github.com/aghorbani84/aurelia-restaurant-os.git
+cd aurelia-restaurant-os
+
+# Use a non-default password even on a development machine.
 export POSTGRES_PASSWORD='change-this-local-dev-password'
-# Optional: only needed when browsers access the API from a different origin.
-export CORS_ALLOWED_ORIGINS='https://app.example.com,https://admin.example.com'
-# Secure cookies are enabled by default. Disable only for local plain-HTTP testing.
-export COOKIE_SECURE=true
-# Exact browser origins allowed to submit staff login/logout and order status mutation requests.
+# Exact browser origins allowed for staff login/logout and status changes.
 export CSRF_ALLOWED_ORIGINS='http://localhost:5173,http://localhost:8088'
+# Optional: only when the browser calls the API from another origin.
+# export CORS_ALLOWED_ORIGINS='https://app.example.com'
+# Secure cookies are on by default; set false only for local plain-HTTP testing.
+# export COOKIE_SECURE=false
+
 docker compose up --build
 ```
 
-Services:
+| Service | Address | Purpose |
+| --- | --- | --- |
+| Web app | http://localhost:5173 | Vite dev server (customer marketplace) |
+| Restaurant application | http://localhost:5173/restaurant/apply | Onboarding form |
+| Staff workspace | http://localhost:5173/staff | Staff login, role-scoped orders, owner audit and application review |
+| Gateway | http://localhost:8088 | Rate-limited API proxy |
+| PostgreSQL | localhost:5432 | Development database |
 
-| Service | Local address | Purpose |
-|---|---|---|
-| Web storefront | http://localhost:5173 | Vite development frontend |
-| Staff workspace | http://localhost:5173/staff | Login and role-scoped read-only order summaries |
-| OpenResty gateway | http://localhost:8088 | Gateway and rate-limited API proxy |
-| Rust API | Internal Docker network only | API; not published on the host |
-| PostgreSQL | localhost:5432 | Local development database |
+The API applies migrations at startup. Add new migration files for schema changes; never edit an applied migration.
 
-The Compose default database password is for local development only. Set `POSTGRES_PASSWORD` before using the stack beyond a local machine. Do not commit real credentials. The API is intentionally not published directly to the host so the gateway's rate limits cannot be bypassed through the Compose host port.
-
-The API applies versioned SQLx migrations at startup and records applied versions in PostgreSQL. The initial migration uses idempotent table creation so an existing local volume initialized by the previous bootstrap SQL keeps its current tables and data. Future schema changes must be added as new migration files; do not edit an already-applied migration.
-
-## Create the initial owner
+### Create the initial owner
 
 There is no public staff-registration endpoint. Create the first owner through the one-time CLI command after the services are running. The command refuses to run if any staff account already exists.
 
@@ -79,100 +109,67 @@ Allowed roles for this command are `manager`, `cashier`, `chef`, and `waiter`. A
 
 ## API
 
-Order status transitions are limited to pending → accepted → preparing → ready → completed; cancellation is allowed only from pending, accepted, or preparing. Owners/managers may perform all valid transitions, chefs control kitchen stages, waiters complete ready orders or cancel pending ones, and cashiers may cancel pending/accepted orders. Every successful change is recorded in `order_status_events` within the same transaction. The current staff UI remains read-only.
-
-
-The Rust API listens on port `8080` inside the Docker network. The OpenResty gateway listens on `8088` and proxies `/api/` to the API.
-
 | Method | Path | Access |
-|---|---|---|
-| GET | `/health` | Public process liveness |
-| GET | `/ready` | Public PostgreSQL readiness |
-| GET | `/api/menu/categories` | Public menu |
-| GET | `/api/menu/items` | Public menu |
-| POST | `/api/orders` | Public customer order request |
-| POST | `/api/orders/:order_id/status` | Staff session; role-scoped transition and CSRF Origin validation |
-| POST | `/api/auth/login` | Staff login |
-| POST | `/api/auth/logout` | Current staff session |
+| --- | --- | --- |
+| GET | `/health`, `/ready` | Public liveness / database readiness |
+| GET | `/api/restaurants` | Public restaurant list |
+| POST | `/api/restaurants/apply` | Public restaurant application (stricter rate limit) |
+| GET | `/api/menu/categories`, `/api/menu/items` | Public menu |
+| POST | `/api/orders` | Public guest order |
+| POST | `/api/orders/:order_id/status` | Staff session, role-scoped transition, CSRF Origin check |
+| POST | `/api/auth/login`, `/api/auth/logout` | Staff login (10 req/min per IP at gateway) / logout |
 | GET | `/api/auth/me` | Current staff session |
 | GET | `/api/admin/orders` | Owner, manager, cashier |
-| GET | `/api/admin/audit?limit=50&before_id=...` | Owner only |
 | GET | `/api/kitchen/orders` | Owner, manager, chef |
 | GET | `/api/service/orders` | Owner, manager, waiter |
+| GET | `/api/admin/audit?limit=50&before_id=…` | Owner |
+| GET | `/api/admin/restaurants/applications` | Owner |
+| POST | `/api/admin/restaurants/applications/:id/review` | Owner (`approve` / `reject`) |
 
-Login creates a random 256-bit opaque session token. Only its SHA-256 hash is stored in PostgreSQL. The cookie is host-only, `HttpOnly`, `SameSite=Lax`, has a 12-hour lifetime, and is `Secure` by default. Logout revokes the server-side session and expires the cookie. Set `COOKIE_SECURE=false` only for local plain-HTTP testing; never disable it in an HTTPS deployment.
-
-Both login and logout require an exact `Origin` match against `CSRF_ALLOWED_ORIGINS`. Missing, `null`, wildcard, and unlisted origins are rejected. This is a separate CSRF defense, not a replacement for CORS. The Compose defaults are for local development; set the variable to the exact HTTPS frontend origin(s) before deployment.
-
-The login endpoint is limited to 10 requests per minute per client IP at the OpenResty gateway. Other `/api/` requests are limited to 120 per minute per client IP. The API is not host-published in Compose; keep it behind the gateway in this development topology.
-
-## Role boundaries
-
-- `owner`: admin, kitchen, and service order views.
-- `manager`: admin, kitchen, and service order views.
-- `cashier`: admin order view.
-- `chef`: kitchen order view.
-- `waiter`: service order view.
-
-These are currently read-only order-summary endpoints. They are not a complete KDS or staff-management system. No staff-creation or role-change API is exposed yet. The initial owner and additional staff accounts are provisioned through the local Docker CLI; role changes are not exposed through an API.
-
-The current staff-protected order routes are read-only. Staff lifecycle events are written to `staff_audit_log` in the same database transaction as the successful operation: initial owner bootstrap, CLI staff provisioning, successful login, and logout. Failed login attempts are also recorded as `staff_login_failed` events with the normalized attempted username when valid; malformed usernames are stored as null. Failed events are not associated with a staff account and do not store passwords, session tokens, or request bodies. Rejected Origin requests are not logged. `GET /api/admin/audit` is an owner-only, read-only API with a `limit` of 1-100 (default 50) and `before_id` cursor pagination; responses are `no-store`. The `/staff` workspace includes an owner-only, read-only audit viewer. Failed login audit records are subject to the same per-IP login rate limit; retention and automated pruning are not yet implemented.
-
-Before adding state-changing staff endpoints, implement and test CSRF protection for those routes and explicit per-action permissions. CORS is not a substitute for CSRF protection.
-
-## Orders and money
-
-Example: create an order (prices are calculated by the API from database values; clients must not submit prices).
+Example order (clients never send prices):
 
 ```bash
 curl -X POST http://localhost:8088/api/orders \
   -H 'Content-Type: application/json' \
-  -d '{
-    "customer_name": "Test Customer",
-    "items": [
-      { "menu_item_id": 1, "quantity": 2 }
-    ]
-  }'
+  -d '{"customer_name": "Test Customer", "items": [{"menu_item_id": 1, "quantity": 2}]}'
 ```
 
-The `price_minor` and `total_minor` fields represent integer monetary minor units. The application still needs an explicit currency configuration before real payments or accounting are enabled.
+## Testing
 
-Order creation validates customer name and line quantities, checks menu item availability in PostgreSQL, reads prices from the database, computes totals with overflow checks, and inserts the order and its lines in one transaction. An unavailable item or invalid request is rejected; database details are not returned to clients.
-
-## Current limitations
-
-- Cross-origin API access is disabled by default. Set `CORS_ALLOWED_ORIGINS` to a comma-separated list of exact origins when a separate browser origin is required; wildcard (`*`) and `null` origins are rejected. The local Vite proxy uses same-origin requests and does not need CORS.
-- There is no customer authentication.
-- Staff account creation is available only through the local Docker CLI; there is no web UI for creating staff accounts or changing roles, and no public staff-creation API exists.
-- Order status mutations, payment integration, full KDS, inventory, reservations, and accounting are not implemented.
-- The `/staff` workspace supports login, read-only role-specific order summaries, and owner-only audit viewing; the public storefront remains an early-stage interface.
-- The Compose web service is the Vite development server, not a production frontend server.
-- Schema changes are managed through versioned SQLx migrations in `services/api/migrations`.
-- CI results must be checked on the relevant GitHub Actions run; a pushed commit alone is not evidence of a successful build.
-
-## Development
-
-- Rust API source: `services/api`
-- Database migrations: `services/api/migrations`
-- Gateway configuration: `services/gateway/nginx.conf`
-- Web app: `apps/web`
-
-## API integration tests
-
-The API integration tests connect to a **dedicated disposable PostgreSQL database** and clear its AURELIA tables before running. Never point `TEST_DATABASE_URL` at a development or production database.
-
-Example using a temporary PostgreSQL container:
+API integration tests need a **dedicated, disposable** PostgreSQL database; they clear AURELIA tables before running. Never point `TEST_DATABASE_URL` at a real database.
 
 ```bash
 docker run --rm --name aurelia-test-db \
-  -e POSTGRES_USER=aurelia \
-  -e POSTGRES_PASSWORD=aurelia_test \
-  -e POSTGRES_DB=aurelia_test \
+  -e POSTGRES_USER=aurelia -e POSTGRES_PASSWORD=aurelia_test -e POSTGRES_DB=aurelia_test \
   -p 5433:5432 postgres:16-alpine
 
-# In another terminal:
+# in another terminal
 TEST_DATABASE_URL='postgres://aurelia:aurelia_test@localhost:5433/aurelia_test' \
   cargo test --manifest-path services/api/Cargo.toml
 ```
 
-GitHub Actions provisions an isolated PostgreSQL 16 service and runs `cargo fmt --check`, `cargo check`, and `cargo test`.
+CI ([`ci.yml`](.github/workflows/ci.yml)) builds the web app, runs `cargo fmt --check`, `cargo check`, and `cargo test` against PostgreSQL 16, validates the Compose and OpenResty configuration, and runs a Docker smoke test of the staff auth flow (`scripts/smoke-auth.sh`).
+
+## Project structure
+
+```
+├── apps/web/                 # React + Vite web app (customer, apply, staff)
+├── services/
+│   ├── api/                  # Rust Axum API, auth, migrations, Dockerfile
+│   └── gateway/              # OpenResty config + Lua rate limiters
+├── docs/marketplace-foundation.md
+├── scripts/smoke-auth.sh
+└── docker-compose.yml
+```
+
+## Current limitations
+
+- No customer authentication, payments, or logistics; currency is not yet configured.
+- No staff-management or role-change API or UI; staff are provisioned via the local CLI.
+- The `/staff` workspace does not yet expose order status controls (the API supports them).
+- The Compose web service is the Vite dev server, not a production frontend server.
+- Audit-log retention and pruning are not implemented.
+
+## Author
+
+Built by [aghorbani84](https://github.com/aghorbani84).
