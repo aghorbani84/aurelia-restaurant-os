@@ -143,6 +143,7 @@ Order creation validates customer name and line quantities, checks menu item ava
 
 - Cross-origin API access is disabled by default. Set `CORS_ALLOWED_ORIGINS` to a comma-separated list of exact origins when a separate browser origin is required; wildcard (`*`) and `null` origins are rejected. The local Vite proxy uses same-origin requests and does not need CORS.
 - There is no customer authentication.
+- Staff users with multiple active restaurant memberships receive HTTP 409 on tenant-scoped staff inbox/menu routes until an explicit restaurant selector is implemented; the API no longer silently chooses one tenant.
 - Staff account creation is available only through the local Docker CLI; there is no web UI for creating staff accounts or changing roles, and no public staff-creation API exists.
 - Order status mutations, payment integration, full KDS, inventory, reservations, and accounting are not implemented.
 - The `/staff` workspace supports login, read-only role-specific order summaries, and owner-only audit viewing; the public storefront remains an early-stage interface.
