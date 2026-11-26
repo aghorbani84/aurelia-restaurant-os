@@ -6,7 +6,7 @@ use axum::{
     extract::State,
     http::{header, HeaderMap, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::{get, post, put},
     Json, Router,
 };
 use rand::{rngs::OsRng, RngCore};
@@ -56,6 +56,33 @@ pub(crate) struct StaffIdentity {
     pub(crate) id: i64,
     pub(crate) username: String,
     pub(crate) role: String,
+    pub(crate) selected_restaurant_id: Option<i64>,
+}
+
+#[derive(Serialize)]
+struct StaffRestaurant {
+    id: i64,
+    slug: String,
+    name: String,
+    role: String,
+    selected: bool,
+}
+
+#[derive(Serialize)]
+struct StaffRestaurantList {
+    restaurants: Vec<StaffRestaurant>,
+    selected_restaurant_id: Option<i64>,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct SelectStaffRestaurantRequest {
+    pub(crate) restaurant_id: i64,
+}
+
+#[derive(Serialize)]
+struct SelectedStaffRestaurant {
+    restaurant_id: i64,
+    role: String,
 }
 
 pub(crate) fn routes() -> Router<AppState> {
@@ -63,6 +90,8 @@ pub(crate) fn routes() -> Router<AppState> {
         .route("/api/auth/login", post(login))
         .route("/api/auth/logout", post(logout))
         .route("/api/auth/me", get(me))
+        .route("/api/auth/restaurants", get(list_staff_restaurants))
+        .route("/api/auth/restaurant", put(select_staff_restaurant))
 }
 
 pub(crate) fn normalize_username(raw: &str) -> Result<String, String> {
@@ -304,8 +333,8 @@ pub(crate) async fn current_staff(
     let token = session_token(headers).ok_or(ApiError::Unauthorized)?;
     let token_hash = hash_session_token(token);
 
-    let staff = sqlx::query_as::<_, (i64, String, String)>(
-        "SELECT u.id, u.username, u.role
+    let staff = sqlx::query_as::<_, (i64, String, String, Option<i64>)>(
+        "SELECT u.id, u.username, u.role, s.selected_restaurant_id
          FROM staff_sessions s
          INNER JOIN staff_users u ON u.id = s.staff_user_id
          WHERE s.token_hash = $1
@@ -317,7 +346,12 @@ pub(crate) async fn current_staff(
     .fetch_optional(&state.db)
     .await
     .map_err(|_| ApiError::Internal)?
-    .map(|(id, username, role)| StaffIdentity { id, username, role })
+    .map(|(id, username, role, selected_restaurant_id)| StaffIdentity {
+        id,
+        username,
+        role,
+        selected_restaurant_id,
+    })
     .ok_or(ApiError::Unauthorized)?;
 
     Ok(staff)
@@ -407,6 +441,7 @@ pub(crate) async fn login(
         id: user_id,
         username,
         role,
+        selected_restaurant_id: None,
     };
 
     let cookie = session_cookie(&token, state.cookie_secure);
@@ -468,6 +503,128 @@ pub(crate) async fn logout(
 async fn me(State(state): State<AppState>, headers: HeaderMap) -> Result<Response, ApiError> {
     let identity = current_staff(&state, &headers).await?;
     let mut response = Json(identity).into_response();
+    set_no_store(&mut response);
+    Ok(response)
+}
+
+
+pub(crate) async fn list_staff_restaurants(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    let staff = current_staff(&state, &headers).await?;
+    let rows = if staff.role == "owner" {
+        Vec::new()
+    } else {
+        sqlx::query_as::<_, (i64, String, String, String)>(
+            "SELECT r.id, r.slug, r.name, m.role
+             FROM restaurant_staff_memberships m
+             INNER JOIN restaurants r ON r.id = m.restaurant_id
+             WHERE m.staff_user_id = $1
+               AND m.is_active = TRUE
+               AND r.status = 'active'
+             ORDER BY r.name ASC, r.id ASC",
+        )
+        .bind(staff.id)
+        .fetch_all(&state.db)
+        .await
+        .map_err(|_| ApiError::Internal)?
+    };
+
+    let restaurants = rows
+        .into_iter()
+        .map(|(id, slug, name, role)| StaffRestaurant {
+            id,
+            slug,
+            name,
+            role,
+            selected: staff.selected_restaurant_id == Some(id),
+        })
+        .collect();
+
+    let mut response = Json(StaffRestaurantList {
+        restaurants,
+        selected_restaurant_id: staff.selected_restaurant_id,
+    })
+    .into_response();
+    set_no_store(&mut response);
+    Ok(response)
+}
+
+pub(crate) async fn select_staff_restaurant(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<SelectStaffRestaurantRequest>,
+) -> Result<Response, ApiError> {
+    validate_request_origin(&state, &headers)?;
+    let staff = current_staff(&state, &headers).await?;
+    if staff.role == "owner" {
+        return Err(ApiError::Forbidden);
+    }
+    if payload.restaurant_id <= 0 {
+        return Err(ApiError::BadRequest("restaurant_id must be positive"));
+    }
+
+    let token = session_token(&headers).ok_or(ApiError::Unauthorized)?;
+    let token_hash = hash_session_token(token);
+    let mut tx = state.db.begin().await.map_err(|_| ApiError::Internal)?;
+
+    let membership = sqlx::query_as::<_, (String, String)>(
+        "SELECT m.role, r.status
+         FROM restaurant_staff_memberships m
+         INNER JOIN restaurants r ON r.id = m.restaurant_id
+         WHERE m.staff_user_id = $1
+           AND m.restaurant_id = $2
+           AND m.is_active = TRUE
+         FOR UPDATE OF m",
+    )
+    .bind(staff.id)
+    .bind(payload.restaurant_id)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(|_| ApiError::Internal)?
+    .ok_or(ApiError::Forbidden)?;
+
+    let (role, restaurant_status) = membership;
+    if restaurant_status != "active" {
+        return Err(ApiError::Forbidden);
+    }
+
+    let updated = sqlx::query(
+        "UPDATE staff_sessions
+         SET selected_restaurant_id = $1
+         WHERE token_hash = $2
+           AND revoked_at IS NULL
+           AND expires_at > now()",
+    )
+    .bind(payload.restaurant_id)
+    .bind(token_hash)
+    .execute(&mut *tx)
+    .await
+    .map_err(|_| ApiError::Internal)?;
+    if updated.rows_affected() != 1 {
+        return Err(ApiError::Unauthorized);
+    }
+
+    sqlx::query(
+        "INSERT INTO staff_audit_log
+            (event_type, actor_staff_user_id, subject_staff_user_id, subject_role, restaurant_id)
+         VALUES ('staff_restaurant_selected', $1, $1, $2, $3)",
+    )
+    .bind(staff.id)
+    .bind(&role)
+    .bind(payload.restaurant_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(|_| ApiError::Internal)?;
+
+    tx.commit().await.map_err(|_| ApiError::Internal)?;
+
+    let mut response = Json(SelectedStaffRestaurant {
+        restaurant_id: payload.restaurant_id,
+        role,
+    })
+    .into_response();
     set_no_store(&mut response);
     Ok(response)
 }
