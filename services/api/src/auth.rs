@@ -576,7 +576,7 @@ pub(crate) async fn select_staff_restaurant(
          WHERE m.staff_user_id = $1
            AND m.restaurant_id = $2
            AND m.is_active = TRUE
-         FOR UPDATE OF m",
+         FOR UPDATE OF m, r",
     )
     .bind(staff.id)
     .bind(payload.restaurant_id)
@@ -594,11 +594,13 @@ pub(crate) async fn select_staff_restaurant(
         "UPDATE staff_sessions
          SET selected_restaurant_id = $1
          WHERE token_hash = $2
+           AND staff_user_id = $3
            AND revoked_at IS NULL
            AND expires_at > now()",
     )
     .bind(payload.restaurant_id)
     .bind(token_hash)
+    .bind(staff.id)
     .execute(&mut *tx)
     .await
     .map_err(|_| ApiError::Internal)?;
