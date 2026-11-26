@@ -1492,12 +1492,8 @@ async fn staff_menu_context(
     let (restaurant_id, role) = if staff.role == "owner" {
         (default_restaurant_id(&state.db).await?, "owner".to_owned())
     } else {
-        let restaurant_id = first_staff_restaurant_id(
-            &state.db,
-            staff.id,
-            staff.selected_restaurant_id,
-        )
-        .await?;
+        let restaurant_id =
+            first_staff_restaurant_id(&state.db, staff.id, staff.selected_restaurant_id).await?;
         let role = restaurant_staff_role(&state.db, staff.id, restaurant_id)
             .await?
             .ok_or(ApiError::Forbidden)?;
@@ -1566,12 +1562,8 @@ async fn list_admin_orders(
         return fetch_orders(&state.db, false, None).await;
     }
 
-    let restaurant_id = first_staff_restaurant_id(
-            &state.db,
-            staff.id,
-            staff.selected_restaurant_id,
-        )
-        .await?;
+    let restaurant_id =
+        first_staff_restaurant_id(&state.db, staff.id, staff.selected_restaurant_id).await?;
     let role = restaurant_staff_role(&state.db, staff.id, restaurant_id)
         .await?
         .ok_or(ApiError::Forbidden)?;
@@ -2020,15 +2012,15 @@ mod tests {
                 .expect("staff may list active restaurant memberships");
         assert_eq!(restaurants_response.status(), StatusCode::OK);
         assert_eq!(
-            restaurants_response.headers().get(header::CACHE_CONTROL).unwrap(),
+            restaurants_response
+                .headers()
+                .get(header::CACHE_CONTROL)
+                .unwrap(),
             "no-store"
         );
-        let restaurants_body = axum::body::to_bytes(
-            restaurants_response.into_body(),
-            usize::MAX,
-        )
-        .await
-        .expect("read restaurant list response");
+        let restaurants_body = axum::body::to_bytes(restaurants_response.into_body(), usize::MAX)
+            .await
+            .expect("read restaurant list response");
         let restaurants_json =
             String::from_utf8(restaurants_body.to_vec()).expect("restaurant list is UTF-8");
         assert!(restaurants_json.contains("Multi Membership One"));
@@ -2064,10 +2056,9 @@ mod tests {
             .expect("selected restaurant is read from the authenticated session");
         assert_eq!(identity.selected_restaurant_id, Some(first_restaurant_id));
 
-        let (_, resolved_first, first_role) =
-            staff_menu_context(&state, &headers, false)
-                .await
-                .expect("selected tenant should resolve");
+        let (_, resolved_first, first_role) = staff_menu_context(&state, &headers, false)
+            .await
+            .expect("selected tenant should resolve");
         assert_eq!(resolved_first, first_restaurant_id);
         assert_eq!(first_role, "manager");
         assert!(list_admin_orders(State(state.clone()), headers.clone())
@@ -2117,10 +2108,9 @@ mod tests {
         .await
         .expect("staff may switch to another active membership");
         assert_eq!(selected_second.status(), StatusCode::OK);
-        let (_, resolved_second, second_role) =
-            staff_menu_context(&state, &headers, false)
-                .await
-                .expect("second selected tenant should resolve");
+        let (_, resolved_second, second_role) = staff_menu_context(&state, &headers, false)
+            .await
+            .expect("second selected tenant should resolve");
         assert_eq!(resolved_second, second_restaurant_id);
         assert_eq!(second_role, "manager");
 
@@ -2140,9 +2130,7 @@ mod tests {
             auth::select_staff_restaurant(
                 State(state.clone()),
                 headers.clone(),
-                Json(auth::SelectStaffRestaurantRequest {
-                    restaurant_id: 1,
-                }),
+                Json(auth::SelectStaffRestaurantRequest { restaurant_id: 1 }),
             )
             .await,
             Err(ApiError::Forbidden)
