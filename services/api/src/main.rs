@@ -1329,15 +1329,18 @@ async fn update_order_status(
 
     let restaurant_role = if staff.role == "owner" {
         "owner".to_owned()
-    } else {
-        let selected_restaurant_id =
-            first_staff_restaurant_id(&state.db, staff.id, staff.selected_restaurant_id).await?;
+    } else if let Some(selected_restaurant_id) = staff.selected_restaurant_id {
         if selected_restaurant_id != restaurant_id {
             return Err(ApiError::Forbidden);
         }
         sqlx::query_scalar::<_, String>(
-            "SELECT role FROM restaurant_staff_memberships
-             WHERE staff_user_id = $1 AND restaurant_id = $2 AND is_active = TRUE",
+            "SELECT m.role
+             FROM restaurant_staff_memberships m
+             INNER JOIN restaurants r ON r.id = m.restaurant_id
+             WHERE m.staff_user_id = $1
+               AND m.restaurant_id = $2
+               AND m.is_active = TRUE
+               AND r.status = 'active'",
         )
         .bind(staff.id)
         .bind(restaurant_id)
@@ -1345,6 +1348,34 @@ async fn update_order_status(
         .await
         .map_err(|_| ApiError::Internal)?
         .ok_or(ApiError::Forbidden)?
+    } else {
+        let memberships: Vec<(i64, String)> = sqlx::query_as(
+            "SELECT m.restaurant_id, m.role
+             FROM restaurant_staff_memberships m
+             INNER JOIN restaurants r ON r.id = m.restaurant_id
+             WHERE m.staff_user_id = $1
+               AND m.is_active = TRUE
+               AND r.status = 'active'
+             ORDER BY m.restaurant_id ASC
+             LIMIT 2",
+        )
+        .bind(staff.id)
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(|_| ApiError::Internal)?;
+
+        match memberships.as_slice() {
+            [] => return Err(ApiError::Forbidden),
+            [(member_restaurant_id, role)] if *member_restaurant_id == restaurant_id => {
+                role.clone()
+            }
+            [(_, _)] => return Err(ApiError::Forbidden),
+            _ => {
+                return Err(ApiError::Conflict(
+                    "multiple active restaurant memberships require an explicit restaurant selection",
+                ));
+            }
+        }
     };
 
     if !valid_order_transition(&current_status, &payload.status) {
@@ -1461,7 +1492,12 @@ async fn staff_menu_context(
     let (restaurant_id, role) = if staff.role == "owner" {
         (default_restaurant_id(&state.db).await?, "owner".to_owned())
     } else {
-        let restaurant_id = first_staff_restaurant_id(&state.db, staff.id, staff.selected_restaurant_id).await?;
+        let restaurant_id = first_staff_restaurant_id(
+            &state.db,
+            staff.id,
+            staff.selected_restaurant_id,
+        )
+        .await?;
         let role = restaurant_staff_role(&state.db, staff.id, restaurant_id)
             .await?
             .ok_or(ApiError::Forbidden)?;
@@ -1530,7 +1566,12 @@ async fn list_admin_orders(
         return fetch_orders(&state.db, false, None).await;
     }
 
-    let restaurant_id = first_staff_restaurant_id(&state.db, staff.id, staff.selected_restaurant_id).await?;
+    let restaurant_id = first_staff_restaurant_id(
+            &state.db,
+            staff.id,
+            staff.selected_restaurant_id,
+        )
+        .await?;
     let role = restaurant_staff_role(&state.db, staff.id, restaurant_id)
         .await?
         .ok_or(ApiError::Forbidden)?;
@@ -1549,7 +1590,12 @@ async fn list_kitchen_orders(
         return fetch_orders(&state.db, true, None).await;
     }
 
-    let restaurant_id = first_staff_restaurant_id(&state.db, staff.id, staff.selected_restaurant_id).await?;
+    let restaurant_id = first_staff_restaurant_id(
+            &state.db,
+            staff.id,
+            staff.selected_restaurant_id,
+        )
+        .await?;
     let role = restaurant_staff_role(&state.db, staff.id, restaurant_id)
         .await?
         .ok_or(ApiError::Forbidden)?;
@@ -1568,7 +1614,12 @@ async fn list_service_orders(
         return fetch_orders(&state.db, true, None).await;
     }
 
-    let restaurant_id = first_staff_restaurant_id(&state.db, staff.id, staff.selected_restaurant_id).await?;
+    let restaurant_id = first_staff_restaurant_id(
+            &state.db,
+            staff.id,
+            staff.selected_restaurant_id,
+        )
+        .await?;
     let role = restaurant_staff_role(&state.db, staff.id, restaurant_id)
         .await?
         .ok_or(ApiError::Forbidden)?;
