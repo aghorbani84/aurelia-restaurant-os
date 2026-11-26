@@ -346,12 +346,14 @@ pub(crate) async fn current_staff(
     .fetch_optional(&state.db)
     .await
     .map_err(|_| ApiError::Internal)?
-    .map(|(id, username, role, selected_restaurant_id)| StaffIdentity {
-        id,
-        username,
-        role,
-        selected_restaurant_id,
-    })
+    .map(
+        |(id, username, role, selected_restaurant_id)| StaffIdentity {
+            id,
+            username,
+            role,
+            selected_restaurant_id,
+        },
+    )
     .ok_or(ApiError::Unauthorized)?;
 
     Ok(staff)
@@ -506,7 +508,6 @@ async fn me(State(state): State<AppState>, headers: HeaderMap) -> Result<Respons
     set_no_store(&mut response);
     Ok(response)
 }
-
 
 pub(crate) async fn list_staff_restaurants(
     State(state): State<AppState>,
