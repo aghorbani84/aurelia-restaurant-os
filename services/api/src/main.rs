@@ -1367,7 +1367,7 @@ async fn update_order_status(
         match memberships.as_slice() {
             [] => return Err(ApiError::Forbidden),
             [(member_restaurant_id, role)] if *member_restaurant_id == restaurant_id => {
-                role.clone()
+                role.to_owned()
             }
             [(_, _)] => return Err(ApiError::Forbidden),
             _ => {
