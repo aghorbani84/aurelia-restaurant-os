@@ -1740,7 +1740,13 @@ fn cors_layer() -> CorsLayer {
         parse_allowed_origins(&configured_origins).unwrap_or_else(|error| panic!("{error}"));
 
     let cors = CorsLayer::new()
-        .allow_methods([Method::GET, Method::POST, Method::PUT, Method::PATCH, Method::DELETE])
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::PUT,
+            Method::PATCH,
+            Method::DELETE,
+        ])
         .allow_headers([header::CONTENT_TYPE]);
 
     if origins.is_empty() {
