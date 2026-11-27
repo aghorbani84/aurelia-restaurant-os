@@ -23,12 +23,13 @@ What the code implements today:
 - **Restaurant onboarding** – public application form at `/restaurant/apply`; the owner account stays inactive until an owner-role reviewer approves or rejects the application
 - **Tenant-aware data** – restaurants, tenant-filtered menus, single-restaurant carts, and tenant-scoped staff order access
 - **Staff menu management** – tenant-scoped category/item CRUD for active restaurant owners and managers, exact-Origin checks, atomic audit logging, and soft-disable to preserve order history
+- **Session-bound staff tenant selection** – authenticated staff can list active memberships and select a restaurant per session; menu and order access is scoped to that selection and rejects cross-tenant writes
 - **Server-side pricing** – order totals are computed from database prices in integer minor units, with overflow checks, in a single transaction
 - **Staff authentication** – Argon2id password hashes, opaque session tokens stored as SHA-256 hashes, `HttpOnly` / `SameSite=Lax` / `Secure` cookies with a 12-hour lifetime
 - **Role-based access** – `owner`, `manager`, `cashier`, `chef`, and `waiter` roles with separate admin, kitchen, and service order views
 - **Order status workflow** – `pending → accepted → preparing → ready → completed`, with role-scoped transitions and cancellation from early states; every change is recorded in `order_status_events`
 - **Audit log** – staff lifecycle events, failed logins, and restaurant-application decisions, with an owner-only paginated API and viewer in the `/staff` workspace
-- **Request hardening** – exact-origin CORS allowlist (off by default), Origin-based CSRF checks on staff login, logout, and order status changes, and per-IP rate limits at the gateway (stricter for login and restaurant applications)
+- **Request hardening** – exact-origin CORS allowlist (off by default), Origin-based CSRF checks on staff login/logout, menu mutations, restaurant selection, and order status changes, plus per-IP gateway rate limits (stricter for login and restaurant applications)
 
 ## Architecture
 
@@ -66,7 +67,7 @@ docker compose up --build
 | --- | --- | --- |
 | Web app | http://localhost:5173 | Vite dev server (customer marketplace) |
 | Restaurant application | http://localhost:5173/restaurant/apply | Onboarding form |
-| Staff workspace | http://localhost:5173/staff | Staff login, role-scoped orders, owner audit/application review, and menu management |
+| Staff workspace | http://localhost:5173/staff | Staff login, role-scoped orders, owner audit/application review, and menu management (tenant selector UI pending) |
 | Gateway | http://localhost:8088 | Rate-limited API proxy |
 | PostgreSQL | localhost:5432 | Development database |
 
@@ -123,7 +124,9 @@ Allowed roles for this command are `manager`, `cashier`, `chef`, and `waiter`. A
 | POST | `/api/orders` | Public guest order |
 | POST | `/api/orders/:order_id/status` | Staff session, role-scoped transition, CSRF Origin check |
 | POST | `/api/auth/login`, `/api/auth/logout` | Staff login (10 req/min per IP at gateway) / logout |
-| GET | `/api/auth/me` | Current staff session |
+| GET | `/api/auth/me` | Current staff session, including selected restaurant |
+| GET | `/api/auth/restaurants` | Authenticated staff; active restaurant memberships |
+| PUT | `/api/auth/restaurant` | Authenticated staff; exact-Origin check and active membership required |
 | GET | `/api/admin/orders` | Owner, manager, cashier |
 | GET | `/api/kitchen/orders` | Owner, manager, chef |
 | GET | `/api/service/orders` | Owner, manager, waiter |
@@ -173,8 +176,8 @@ CI ([`ci.yml`](.github/workflows/ci.yml)) builds the web app, runs `cargo fmt --
 - No staff-management or role-change API or UI; staff are provisioned via the local CLI.
 - The `/staff` workspace does not yet expose order status controls (the API supports them).
 - Menu `price_minor` has no configured currency or minor-unit scale; the Toman label is provisional. Do not use menu prices for payments or accounting.
-- No browser end-to-end test covers the staff menu manager.
-- Staff with multiple active restaurant memberships receive HTTP 409 on tenant-scoped menu/order-inbox routes; explicit session-bound restaurant selection is not included in this branch.
+- No browser end-to-end test covers the staff menu manager or tenant-selection workflow.
+- No React restaurant-switcher UI is included yet; multi-membership staff can select a tenant through the session API, but menu/order workflows still need that UI integration.
 - The Compose web service is the Vite dev server, not a production frontend server.
 - Audit-log retention and pruning are not implemented.
 

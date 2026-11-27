@@ -1329,10 +1329,18 @@ async fn update_order_status(
 
     let restaurant_role = if staff.role == "owner" {
         "owner".to_owned()
-    } else {
+    } else if let Some(selected_restaurant_id) = staff.selected_restaurant_id {
+        if selected_restaurant_id != restaurant_id {
+            return Err(ApiError::Forbidden);
+        }
         sqlx::query_scalar::<_, String>(
-            "SELECT role FROM restaurant_staff_memberships
-             WHERE staff_user_id = $1 AND restaurant_id = $2 AND is_active = TRUE",
+            "SELECT m.role
+             FROM restaurant_staff_memberships m
+             INNER JOIN restaurants r ON r.id = m.restaurant_id
+             WHERE m.staff_user_id = $1
+               AND m.restaurant_id = $2
+               AND m.is_active = TRUE
+               AND r.status = 'active'",
         )
         .bind(staff.id)
         .bind(restaurant_id)
@@ -1340,6 +1348,34 @@ async fn update_order_status(
         .await
         .map_err(|_| ApiError::Internal)?
         .ok_or(ApiError::Forbidden)?
+    } else {
+        let memberships: Vec<(i64, String)> = sqlx::query_as(
+            "SELECT m.restaurant_id, m.role
+             FROM restaurant_staff_memberships m
+             INNER JOIN restaurants r ON r.id = m.restaurant_id
+             WHERE m.staff_user_id = $1
+               AND m.is_active = TRUE
+               AND r.status = 'active'
+             ORDER BY m.restaurant_id ASC
+             LIMIT 2",
+        )
+        .bind(staff.id)
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(|_| ApiError::Internal)?;
+
+        match memberships.as_slice() {
+            [] => return Err(ApiError::Forbidden),
+            [(member_restaurant_id, role)] if *member_restaurant_id == restaurant_id => {
+                role.to_owned()
+            }
+            [(_, _)] => return Err(ApiError::Forbidden),
+            _ => {
+                return Err(ApiError::Conflict(
+                    "multiple active restaurant memberships require an explicit restaurant selection",
+                ));
+            }
+        }
     };
 
     if !valid_order_transition(&current_status, &payload.status) {
@@ -1388,11 +1424,38 @@ async fn update_order_status(
     ))
 }
 
-async fn first_staff_restaurant_id(db: &PgPool, staff_user_id: i64) -> Result<i64, ApiError> {
+async fn first_staff_restaurant_id(
+    db: &PgPool,
+    staff_user_id: i64,
+    selected_restaurant_id: Option<i64>,
+) -> Result<i64, ApiError> {
+    if let Some(restaurant_id) = selected_restaurant_id {
+        return sqlx::query_scalar(
+            "SELECT m.restaurant_id
+             FROM restaurant_staff_memberships m
+             INNER JOIN restaurants r ON r.id = m.restaurant_id
+             WHERE m.staff_user_id = $1
+               AND m.restaurant_id = $2
+               AND m.is_active = TRUE
+               AND r.status = 'active'",
+        )
+        .bind(staff_user_id)
+        .bind(restaurant_id)
+        .fetch_optional(db)
+        .await
+        .map_err(|_| ApiError::Internal)?
+        .ok_or(ApiError::Forbidden);
+    }
+
     let restaurant_ids: Vec<i64> = sqlx::query_scalar(
-        "SELECT restaurant_id FROM restaurant_staff_memberships
-         WHERE staff_user_id = $1 AND is_active = TRUE
-         ORDER BY restaurant_id ASC LIMIT 2",
+        "SELECT m.restaurant_id
+         FROM restaurant_staff_memberships m
+         INNER JOIN restaurants r ON r.id = m.restaurant_id
+         WHERE m.staff_user_id = $1
+           AND m.is_active = TRUE
+           AND r.status = 'active'
+         ORDER BY m.restaurant_id ASC
+         LIMIT 2",
     )
     .bind(staff_user_id)
     .fetch_all(db)
@@ -1429,7 +1492,8 @@ async fn staff_menu_context(
     let (restaurant_id, role) = if staff.role == "owner" {
         (default_restaurant_id(&state.db).await?, "owner".to_owned())
     } else {
-        let restaurant_id = first_staff_restaurant_id(&state.db, staff.id).await?;
+        let restaurant_id =
+            first_staff_restaurant_id(&state.db, staff.id, staff.selected_restaurant_id).await?;
         let role = restaurant_staff_role(&state.db, staff.id, restaurant_id)
             .await?
             .ok_or(ApiError::Forbidden)?;
@@ -1498,7 +1562,8 @@ async fn list_admin_orders(
         return fetch_orders(&state.db, false, None).await;
     }
 
-    let restaurant_id = first_staff_restaurant_id(&state.db, staff.id).await?;
+    let restaurant_id =
+        first_staff_restaurant_id(&state.db, staff.id, staff.selected_restaurant_id).await?;
     let role = restaurant_staff_role(&state.db, staff.id, restaurant_id)
         .await?
         .ok_or(ApiError::Forbidden)?;
@@ -1517,7 +1582,8 @@ async fn list_kitchen_orders(
         return fetch_orders(&state.db, true, None).await;
     }
 
-    let restaurant_id = first_staff_restaurant_id(&state.db, staff.id).await?;
+    let restaurant_id =
+        first_staff_restaurant_id(&state.db, staff.id, staff.selected_restaurant_id).await?;
     let role = restaurant_staff_role(&state.db, staff.id, restaurant_id)
         .await?
         .ok_or(ApiError::Forbidden)?;
@@ -1536,7 +1602,8 @@ async fn list_service_orders(
         return fetch_orders(&state.db, true, None).await;
     }
 
-    let restaurant_id = first_staff_restaurant_id(&state.db, staff.id).await?;
+    let restaurant_id =
+        first_staff_restaurant_id(&state.db, staff.id, staff.selected_restaurant_id).await?;
     let role = restaurant_staff_role(&state.db, staff.id, restaurant_id)
         .await?
         .ok_or(ApiError::Forbidden)?;
@@ -1673,7 +1740,13 @@ fn cors_layer() -> CorsLayer {
         parse_allowed_origins(&configured_origins).unwrap_or_else(|error| panic!("{error}"));
 
     let cors = CorsLayer::new()
-        .allow_methods([Method::GET, Method::POST])
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::PUT,
+            Method::PATCH,
+            Method::DELETE,
+        ])
         .allow_headers([header::CONTENT_TYPE]);
 
     if origins.is_empty() {
@@ -1911,7 +1984,7 @@ mod tests {
             staff_session_headers(&state, "multi_manager", "multi-manager-password-strong").await;
 
         assert!(matches!(
-            first_staff_restaurant_id(&db, staff_id).await,
+            first_staff_restaurant_id(&db, staff_id, None).await,
             Err(ApiError::Conflict(_))
         ));
         assert!(matches!(
@@ -1927,9 +2000,143 @@ mod tests {
             Err(ApiError::Conflict(_))
         ));
         assert!(matches!(
-            list_service_orders(State(state.clone()), headers).await,
+            list_service_orders(State(state.clone()), headers.clone()).await,
             Err(ApiError::Conflict(_))
         ));
+
+        let restaurants_response =
+            auth::list_staff_restaurants(State(state.clone()), headers.clone())
+                .await
+                .expect("staff may list active restaurant memberships");
+        assert_eq!(restaurants_response.status(), StatusCode::OK);
+        assert_eq!(
+            restaurants_response
+                .headers()
+                .get(header::CACHE_CONTROL)
+                .unwrap(),
+            "no-store"
+        );
+        let restaurants_body = axum::body::to_bytes(restaurants_response.into_body(), usize::MAX)
+            .await
+            .expect("read restaurant list response");
+        let restaurants_json =
+            String::from_utf8(restaurants_body.to_vec()).expect("restaurant list is UTF-8");
+        assert!(restaurants_json.contains("Multi Membership One"));
+        assert!(restaurants_json.contains("Multi Membership Two"));
+
+        let mut missing_origin = headers.clone();
+        missing_origin.remove(header::ORIGIN);
+        assert!(matches!(
+            auth::select_staff_restaurant(
+                State(state.clone()),
+                missing_origin,
+                Json(auth::SelectStaffRestaurantRequest {
+                    restaurant_id: first_restaurant_id,
+                }),
+            )
+            .await,
+            Err(ApiError::Forbidden)
+        ));
+
+        let selected_first = auth::select_staff_restaurant(
+            State(state.clone()),
+            headers.clone(),
+            Json(auth::SelectStaffRestaurantRequest {
+                restaurant_id: first_restaurant_id,
+            }),
+        )
+        .await
+        .expect("staff may select an active restaurant they belong to");
+        assert_eq!(selected_first.status(), StatusCode::OK);
+
+        let identity = auth::current_staff(&state, &headers)
+            .await
+            .expect("selected restaurant is read from the authenticated session");
+        assert_eq!(identity.selected_restaurant_id, Some(first_restaurant_id));
+
+        let (_, resolved_first, first_role) = staff_menu_context(&state, &headers, false)
+            .await
+            .expect("selected tenant should resolve");
+        assert_eq!(resolved_first, first_restaurant_id);
+        assert_eq!(first_role, "manager");
+        assert!(list_admin_orders(State(state.clone()), headers.clone())
+            .await
+            .is_ok());
+
+        let second_item_id: i64 = sqlx::query_scalar(
+            "INSERT INTO menu_items (restaurant_id, name, price_minor, available)
+             VALUES ($1, 'Second tenant order item', 2500, TRUE)
+             RETURNING id",
+        )
+        .bind(second_restaurant_id)
+        .fetch_one(&db)
+        .await
+        .expect("create second tenant menu item");
+        let (_, Json(second_order)) = submit(
+            &db,
+            "Second tenant customer",
+            vec![OrderItemInput {
+                menu_item_id: second_item_id,
+                quantity: 1,
+            }],
+        )
+        .await
+        .expect("create second tenant order");
+
+        assert!(matches!(
+            update_order_status(
+                State(state.clone()),
+                headers.clone(),
+                Path(second_order.id),
+                Json(UpdateOrderStatusRequest {
+                    status: "accepted".to_owned(),
+                }),
+            )
+            .await,
+            Err(ApiError::Forbidden)
+        ));
+
+        let selected_second = auth::select_staff_restaurant(
+            State(state.clone()),
+            headers.clone(),
+            Json(auth::SelectStaffRestaurantRequest {
+                restaurant_id: second_restaurant_id,
+            }),
+        )
+        .await
+        .expect("staff may switch to another active membership");
+        assert_eq!(selected_second.status(), StatusCode::OK);
+        let (_, resolved_second, second_role) = staff_menu_context(&state, &headers, false)
+            .await
+            .expect("second selected tenant should resolve");
+        assert_eq!(resolved_second, second_restaurant_id);
+        assert_eq!(second_role, "manager");
+
+        let (_, _, Json(accepted_order)) = update_order_status(
+            State(state.clone()),
+            headers.clone(),
+            Path(second_order.id),
+            Json(UpdateOrderStatusRequest {
+                status: "accepted".to_owned(),
+            }),
+        )
+        .await
+        .expect("staff may mutate an order only in the selected tenant");
+        assert_eq!(accepted_order.status, "accepted");
+
+        assert!(matches!(
+            auth::select_staff_restaurant(
+                State(state.clone()),
+                headers.clone(),
+                Json(auth::SelectStaffRestaurantRequest { restaurant_id: 1 }),
+            )
+            .await,
+            Err(ApiError::Forbidden)
+        ));
+        let identity = auth::current_staff(&state, &headers)
+            .await
+            .expect("unauthorized selection must not change the session");
+        assert_eq!(identity.selected_restaurant_id, Some(second_restaurant_id));
 
         sqlx::query(
             "UPDATE restaurant_staff_memberships
@@ -1940,14 +2147,42 @@ mod tests {
         .bind(staff_id)
         .execute(&db)
         .await
-        .expect("deactivate second membership");
+        .expect("deactivate selected membership");
+
+        assert!(matches!(
+            first_staff_restaurant_id(&db, staff_id, Some(second_restaurant_id)).await,
+            Err(ApiError::Forbidden)
+        ));
+        assert!(matches!(
+            staff_menu_context(&state, &headers, false).await,
+            Err(ApiError::Forbidden)
+        ));
+
+        sqlx::query(
+            "UPDATE staff_sessions
+             SET selected_restaurant_id = NULL
+             WHERE staff_user_id = $1",
+        )
+        .bind(staff_id)
+        .execute(&db)
+        .await
+        .expect("clear stale test selection");
 
         assert_eq!(
-            first_staff_restaurant_id(&db, staff_id)
+            first_staff_restaurant_id(&db, staff_id, None)
                 .await
-                .expect("one active membership should resolve"),
+                .expect("one remaining active membership should resolve"),
             first_restaurant_id
         );
+
+        let selection_audit_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM staff_audit_log
+             WHERE event_type = 'staff_restaurant_selected'",
+        )
+        .fetch_one(&db)
+        .await
+        .expect("count restaurant selection audit events");
+        assert_eq!(selection_audit_count, 2);
     }
 
     #[tokio::test]
