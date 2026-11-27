@@ -13,7 +13,7 @@
 
 AURELIA started as a single-restaurant system and is being extended into a multi-restaurant food marketplace (see [`docs/marketplace-foundation.md`](docs/marketplace-foundation.md)). It is a modular monolith: one Rust API behind a rate-limiting OpenResty gateway, a React/Vite web app, and PostgreSQL with versioned migrations.
 
-> **Not production-ready.** Payments, customer accounts, logistics, menu management UI, a full kitchen display, inventory, reservations, accounting, and production deployment hardening are not implemented.
+> **Not production-ready.** Payments, customer accounts, logistics, a full kitchen display, inventory, reservations, accounting, currency configuration, and production deployment hardening are not implemented. Menu management is included in this branch, but its monetary unit is provisional and it has no browser end-to-end coverage.
 
 ## Features
 
@@ -22,6 +22,7 @@ What the code implements today:
 - **Customer web app (Persian, RTL)** – restaurant discovery, menus, and guest ordering
 - **Restaurant onboarding** – public application form at `/restaurant/apply`; the owner account stays inactive until an owner-role reviewer approves or rejects the application
 - **Tenant-aware data** – restaurants, tenant-filtered menus, single-restaurant carts, and tenant-scoped staff order access
+- **Staff menu management** – tenant-scoped category/item CRUD for active restaurant owners and managers, exact-Origin checks, atomic audit logging, and soft-disable to preserve order history
 - **Server-side pricing** – order totals are computed from database prices in integer minor units, with overflow checks, in a single transaction
 - **Staff authentication** – Argon2id password hashes, opaque session tokens stored as SHA-256 hashes, `HttpOnly` / `SameSite=Lax` / `Secure` cookies with a 12-hour lifetime
 - **Role-based access** – `owner`, `manager`, `cashier`, `chef`, and `waiter` roles with separate admin, kitchen, and service order views
@@ -65,7 +66,7 @@ docker compose up --build
 | --- | --- | --- |
 | Web app | http://localhost:5173 | Vite dev server (customer marketplace) |
 | Restaurant application | http://localhost:5173/restaurant/apply | Onboarding form |
-| Staff workspace | http://localhost:5173/staff | Staff login, role-scoped orders, owner audit and application review |
+| Staff workspace | http://localhost:5173/staff | Staff login, role-scoped orders, owner audit/application review, and menu management |
 | Gateway | http://localhost:8088 | Rate-limited API proxy |
 | PostgreSQL | localhost:5432 | Development database |
 
@@ -115,6 +116,10 @@ Allowed roles for this command are `manager`, `cashier`, `chef`, and `waiter`. A
 | GET | `/api/restaurants` | Public restaurant list |
 | POST | `/api/restaurants/apply` | Public restaurant application (stricter rate limit) |
 | GET | `/api/menu/categories`, `/api/menu/items` | Public menu |
+| GET | `/api/restaurant/menu/categories`, `/api/restaurant/menu/items` | Authenticated restaurant owner/manager |
+| POST, DELETE | `/api/restaurant/menu/categories`, `/api/restaurant/menu/categories/:category_id` | Active restaurant owner/manager; mutations validate Origin |
+| POST, PUT, DELETE | `/api/restaurant/menu/items`, `/api/restaurant/menu/items/:item_id` | Active restaurant owner/manager; mutations validate Origin |
+| PATCH | `/api/restaurant/menu/items/:item_id/availability` | Active restaurant owner/manager; validates Origin |
 | POST | `/api/orders` | Public guest order |
 | POST | `/api/orders/:order_id/status` | Staff session, role-scoped transition, CSRF Origin check |
 | POST | `/api/auth/login`, `/api/auth/logout` | Staff login (10 req/min per IP at gateway) / logout |
@@ -167,6 +172,9 @@ CI ([`ci.yml`](.github/workflows/ci.yml)) builds the web app, runs `cargo fmt --
 - No customer authentication, payments, or logistics; currency is not yet configured.
 - No staff-management or role-change API or UI; staff are provisioned via the local CLI.
 - The `/staff` workspace does not yet expose order status controls (the API supports them).
+- Menu `price_minor` has no configured currency or minor-unit scale; the Toman label is provisional. Do not use menu prices for payments or accounting.
+- No browser end-to-end test covers the staff menu manager.
+- Staff with multiple active restaurant memberships receive HTTP 409 on tenant-scoped menu/order-inbox routes; explicit session-bound restaurant selection is not included in this branch.
 - The Compose web service is the Vite dev server, not a production frontend server.
 - Audit-log retention and pruning are not implemented.
 

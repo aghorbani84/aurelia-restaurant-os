@@ -1,3 +1,4 @@
+import RestaurantMenuManager from './RestaurantMenuManager';
 import { FormEvent, useEffect, useState } from 'react';
 import { ArrowLeft, ChefHat, ClipboardList, History, LoaderCircle, LogOut, RefreshCw, ShieldCheck, Store, UserRound } from 'lucide-react';
 
@@ -417,6 +418,7 @@ export default function StaffPortal() {
               </div>
             )}
             <p className="staff-readonly-note">این پنل در این مرحله فقط سفارش‌ها را نمایش می‌دهد؛ تغییر وضعیت، مدیریت کارکنان و عملیات مالی هنوز فعال نیست.</p>
+            {(identity.role === 'owner' || identity.role === 'manager') && <RestaurantMenuManager />}
             {identity.role === 'owner' && (
               <>
                 <section className="staff-applications-section" aria-labelledby="restaurant-applications-title">
