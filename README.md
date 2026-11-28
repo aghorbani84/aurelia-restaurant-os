@@ -177,7 +177,7 @@ CI ([`ci.yml`](.github/workflows/ci.yml)) builds the web app, runs `cargo fmt --
 - The `/staff` workspace does not yet expose order status controls (the API supports them).
 - Menu `price_minor` has no configured currency or minor-unit scale; the Toman label is provisional. Do not use menu prices for payments or accounting.
 - No browser end-to-end test covers the staff menu manager or tenant-selection workflow.
-- No React restaurant-switcher UI is included yet; multi-membership staff can select a tenant through the session API, but menu/order workflows still need that UI integration.
+- The React staff restaurant switcher is implemented in the follow-up branch stacked on the session API PR; it is not available on `main` until the stacked PRs are merged.
 - The Compose web service is the Vite dev server, not a production frontend server.
 - Audit-log retention and pruning are not implemented.
 
