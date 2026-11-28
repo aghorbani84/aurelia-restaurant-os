@@ -4,7 +4,10 @@ import { ArrowLeft, ChefHat, ClipboardList, History, LoaderCircle, LogOut, Refre
 
 type StaffRole = 'owner' | 'manager' | 'cashier' | 'chef' | 'waiter';
 type AuditRole = StaffRole | 'restaurant_owner';
-type StaffIdentity = { id: number; username: string; role: StaffRole };
+type StaffIdentity = { id: number; username: string; role: StaffRole; selected_restaurant_id: number | null };
+type RestaurantRole = 'restaurant_owner' | 'manager' | 'cashier' | 'chef' | 'waiter';
+type StaffRestaurant = { id: number; slug: string; name: string; role: RestaurantRole; selected: boolean };
+type StaffRestaurantList = { restaurants: StaffRestaurant[]; selected_restaurant_id: number | null };
 type PendingRestaurantApplication = {
   id: number;
   restaurant_id: number;
@@ -41,6 +44,14 @@ type AuditPage = { events: AuditEvent[]; next_cursor: number | null };
 
 const roleLabels: Record<StaffRole, string> = {
   owner: 'مالک',
+  manager: 'مدیر',
+  cashier: 'صندوق‌دار',
+  chef: 'آشپز',
+  waiter: 'گارسون',
+};
+
+const restaurantRoleLabels: Record<RestaurantRole, string> = {
+  restaurant_owner: 'مالک رستوران',
   manager: 'مدیر',
   cashier: 'صندوق‌دار',
   chef: 'آشپز',
@@ -109,7 +120,32 @@ function isStaffIdentity(value: unknown): value is StaffIdentity {
   const candidate = value as Record<string, unknown>;
   return typeof candidate.id === 'number'
     && typeof candidate.username === 'string'
-    && ['owner', 'manager', 'cashier', 'chef', 'waiter'].includes(String(candidate.role));
+    && ['owner', 'manager', 'cashier', 'chef', 'waiter'].includes(String(candidate.role))
+    && (candidate.selected_restaurant_id === null
+      || (typeof candidate.selected_restaurant_id === 'number'
+        && Number.isSafeInteger(candidate.selected_restaurant_id)
+        && candidate.selected_restaurant_id > 0));
+}
+
+function isStaffRestaurantList(value: unknown): value is StaffRestaurantList {
+  if (!value || typeof value !== 'object') return false;
+  const candidate = value as Record<string, unknown>;
+  if (!Array.isArray(candidate.restaurants)) return false;
+  if (candidate.selected_restaurant_id !== null
+    && (typeof candidate.selected_restaurant_id !== 'number'
+      || !Number.isSafeInteger(candidate.selected_restaurant_id)
+      || candidate.selected_restaurant_id <= 0)) return false;
+  return candidate.restaurants.every((entry) => {
+    if (!entry || typeof entry !== 'object') return false;
+    const restaurant = entry as Record<string, unknown>;
+    return typeof restaurant.id === 'number'
+      && Number.isSafeInteger(restaurant.id)
+      && restaurant.id > 0
+      && typeof restaurant.slug === 'string'
+      && typeof restaurant.name === 'string'
+      && ['restaurant_owner', 'manager', 'cashier', 'chef', 'waiter'].includes(String(restaurant.role))
+      && typeof restaurant.selected === 'boolean';
+  });
 }
 
 async function responseError(response: Response, fallback: string): Promise<Error> {
@@ -119,6 +155,11 @@ async function responseError(response: Response, fallback: string): Promise<Erro
 
 export default function StaffPortal() {
   const [identity, setIdentity] = useState<StaffIdentity | null>(null);
+  const [restaurants, setRestaurants] = useState<StaffRestaurant[]>([]);
+  const [restaurantsLoading, setRestaurantsLoading] = useState(false);
+  const [restaurantsReady, setRestaurantsReady] = useState(false);
+  const [restaurantsError, setRestaurantsError] = useState('');
+  const [selectingRestaurantId, setSelectingRestaurantId] = useState<number | null>(null);
   const [sessionLoading, setSessionLoading] = useState(true);
   const [orders, setOrders] = useState<OrderSummary[]>([]);
   const [ordersLoading, setOrdersLoading] = useState(false);
@@ -138,6 +179,18 @@ export default function StaffPortal() {
   const [applicationsError, setApplicationsError] = useState('');
   const [reviewingApplicationId, setReviewingApplicationId] = useState<number | null>(null);
   const [applicationsRefreshKey, setApplicationsRefreshKey] = useState(0);
+
+  const activeRestaurant = identity
+    ? restaurants.find((restaurant) => restaurant.id === identity.selected_restaurant_id)
+      ?? (identity.selected_restaurant_id === null && restaurants.length === 1 ? restaurants[0] : undefined)
+    : undefined;
+  const needsRestaurantSelection = Boolean(identity && identity.role !== 'owner' && (
+    (restaurants.length > 1 && !activeRestaurant)
+    || (identity.selected_restaurant_id !== null && !activeRestaurant)
+  ));
+  const showRestaurantSelector = Boolean(identity && identity.role !== 'owner' && (
+    restaurants.length > 1 || (identity.selected_restaurant_id !== null && !activeRestaurant)
+  ));
 
   useEffect(() => {
     let cancelled = false;
@@ -163,7 +216,62 @@ export default function StaffPortal() {
 
   useEffect(() => {
     if (!identity) {
+      setRestaurants([]);
+      setRestaurantsLoading(false);
+      setRestaurantsReady(false);
+      setRestaurantsError('');
+      return;
+    }
+    if (identity.role === 'owner') {
+      setRestaurants([]);
+      setRestaurantsLoading(false);
+      setRestaurantsReady(true);
+      setRestaurantsError('');
+      return;
+    }
+
+    let cancelled = false;
+    setRestaurantsReady(false);
+    setRestaurantsLoading(true);
+    setRestaurantsError('');
+    fetch('/api/auth/restaurants', { credentials: 'same-origin', cache: 'no-store' })
+      .then(async (response) => {
+        if (!response.ok) throw await responseError(response, 'دریافت رستوران‌های مجاز ناموفق بود.');
+        const body: unknown = await response.json();
+        if (!isStaffRestaurantList(body)) throw new Error('ساختار فهرست رستوران‌ها معتبر نیست.');
+        return body;
+      })
+      .then((data) => {
+        if (!cancelled) setRestaurants(data.restaurants);
+      })
+      .catch((reason: unknown) => {
+        if (!cancelled) {
+          setRestaurants([]);
+          setRestaurantsError(reason instanceof Error ? reason.message : 'دریافت رستوران‌ها ناموفق بود.');
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setRestaurantsLoading(false);
+          setRestaurantsReady(true);
+        }
+      });
+    return () => { cancelled = true; };
+  }, [identity?.id, identity?.role, identity?.selected_restaurant_id]);
+
+  useEffect(() => {
+    if (!identity) {
       setOrders([]);
+      setOrdersLoading(false);
+      return;
+    }
+    if (!restaurantsReady || restaurantsLoading) {
+      setOrdersLoading(false);
+      return;
+    }
+    if (identity.role !== 'owner' && (restaurants.length === 0 || needsRestaurantSelection)) {
+      setOrders([]);
+      setOrdersLoading(false);
       return;
     }
     let cancelled = false;
@@ -186,7 +294,7 @@ export default function StaffPortal() {
         if (!cancelled) setOrdersLoading(false);
       });
     return () => { cancelled = true; };
-  }, [identity, refreshKey]);
+  }, [identity, refreshKey, restaurantsReady, restaurantsLoading, restaurants, needsRestaurantSelection]);
 
   useEffect(() => {
     if (identity?.role !== 'owner') {
@@ -243,6 +351,36 @@ export default function StaffPortal() {
       .finally(() => { if (!cancelled) setApplicationsLoading(false); });
     return () => { cancelled = true; };
   }, [identity, applicationsRefreshKey]);
+
+  async function selectRestaurant(restaurantId: number) {
+    setSelectingRestaurantId(restaurantId);
+    setRestaurantsError('');
+    setError('');
+    setNotice('');
+    try {
+      const response = await fetch('/api/auth/restaurant', {
+        method: 'PUT',
+        credentials: 'same-origin',
+        cache: 'no-store',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ restaurant_id: restaurantId }),
+      });
+      if (!response.ok) throw await responseError(response, 'تغییر رستوران فعال انجام نشد.');
+      const body: unknown = await response.json();
+      if (!body || typeof body !== 'object'
+        || (body as Record<string, unknown>).restaurant_id !== restaurantId) {
+        throw new Error('پاسخ انتخاب رستوران از سرور معتبر نیست.');
+      }
+      setIdentity((current) => current
+        ? { ...current, selected_restaurant_id: restaurantId }
+        : current);
+      setNotice('رستوران فعال تغییر کرد؛ اطلاعات با محدوده جدید بارگذاری می‌شوند.');
+    } catch (reason) {
+      setRestaurantsError(reason instanceof Error ? reason.message : 'تغییر رستوران ناموفق بود.');
+    } finally {
+      setSelectingRestaurantId(null);
+    }
+  }
 
   async function reviewApplication(applicationId: number, decision: 'approve' | 'reject') {
     if (decision === 'reject' && !window.confirm('این درخواست رد شود؟ حساب مالک غیرفعال باقی می‌ماند.')) return;
@@ -393,6 +531,51 @@ export default function StaffPortal() {
                 </button>
               </div>
             </div>
+
+            {identity.role !== 'owner' && (
+              <section className="staff-restaurant-switcher" aria-label="محدوده رستوران">
+                <div className="staff-restaurant-current">
+                  <Store size={19} />
+                  <div>
+                    <small>رستوران فعال</small>
+                    <strong>{activeRestaurant?.name ?? (restaurants.length === 0 ? 'عضویت فعال یافت نشد' : 'انتخاب رستوران')}</strong>
+                  </div>
+                </div>
+                {restaurantsLoading ? (
+                  <span className="staff-restaurant-loading"><LoaderCircle className="spin" size={15} /> در حال دریافت...</span>
+                ) : restaurants.length === 0 ? (
+                  <p className="staff-restaurant-help">برای این حساب عضویت فعال در رستورانی پیدا نشد. دسترسی عملیاتی غیرفعال است.</p>
+                ) : showRestaurantSelector ? (
+                  <label className="staff-restaurant-select" htmlFor="staff-active-restaurant">
+                    <span>انتخاب محدوده کاری</span>
+                    <select
+                      id="staff-active-restaurant"
+                      value={activeRestaurant ? String(activeRestaurant.id) : ''}
+                      onChange={(event) => {
+                        const restaurantId = Number(event.target.value);
+                        if (Number.isSafeInteger(restaurantId) && restaurantId > 0) void selectRestaurant(restaurantId);
+                      }}
+                      disabled={selectingRestaurantId !== null}
+                    >
+                      <option value="" disabled>یک رستوران را انتخاب کنید</option>
+                      {restaurants.map((restaurant) => (
+                        <option value={restaurant.id} key={restaurant.id}>
+                          {restaurant.name} — {restaurantRoleLabels[restaurant.role]}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                ) : activeRestaurant ? (
+                  <span className="staff-restaurant-role">{restaurantRoleLabels[activeRestaurant.role]}</span>
+                ) : null}
+                {needsRestaurantSelection && (
+                  <p className="staff-restaurant-required" role="alert">
+                    برای مشاهده سفارش‌ها و مدیریت منو، ابتدا رستوران فعال را انتخاب کنید.
+                  </p>
+                )}
+                {restaurantsError && <p className="staff-feedback staff-error" role="alert">{restaurantsError}</p>}
+              </section>
+            )}
 
             <div className="staff-section-title">
               <div><ClipboardList size={19} /><h2>سفارش‌های قابل مشاهده</h2></div>
