@@ -290,3 +290,43 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid 
   .application-address { grid-column: auto; }
   .staff-application-actions { flex-direction: column; }
 }
+
+
+/* Session-bound staff restaurant selector */
+.staff-restaurant-switcher {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 14px 22px;
+  margin: 18px 0 26px;
+  padding: 16px 18px;
+  border: 1px solid var(--line);
+  border-radius: 15px;
+  background: var(--white);
+}
+.staff-restaurant-current { display: flex; align-items: center; gap: 11px; color: var(--accent-dark); }
+.staff-restaurant-current > div { display: grid; gap: 3px; }
+.staff-restaurant-current small, .staff-restaurant-select span { color: var(--muted); font-size: 10px; }
+.staff-restaurant-current strong { color: var(--ink); font-size: 13px; font-weight: 600; }
+.staff-restaurant-select { display: grid; gap: 6px; min-width: min(100%, 260px); color: var(--ink-soft); font-size: 10px; }
+.staff-restaurant-select select {
+  min-width: 260px;
+  max-width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: #fffefa;
+  color: var(--ink);
+  font: inherit;
+}
+.staff-restaurant-select select:focus-visible { outline: 3px solid #c58a4c; outline-offset: 2px; }
+.staff-restaurant-role { color: var(--muted); font-size: 10px; }
+.staff-restaurant-loading { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); font-size: 10px; }
+.staff-restaurant-help, .staff-restaurant-required { flex-basis: 100%; margin: 0; font-size: 10px; line-height: 1.9; }
+.staff-restaurant-help { color: var(--muted); }
+.staff-restaurant-required { color: #98534b; }
+@media (max-width: 560px) {
+  .staff-restaurant-switcher { align-items: stretch; flex-direction: column; padding: 14px; }
+  .staff-restaurant-select, .staff-restaurant-select select { width: 100%; min-width: 0; }
+}
